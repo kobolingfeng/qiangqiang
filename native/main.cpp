@@ -153,6 +153,21 @@ static ComPtr<IDCompositionTarget>   g_dcompTarget;
 static ComPtr<IDCompositionVisual>   g_dcompVisual;
 static bool g_mouseTracking = false;
 
+static std::wstring g_appDataDir;
+static std::wstring app_data_dir() {
+    if (!g_appDataDir.empty()) return g_appDataDir;
+    PWSTR p = nullptr;
+    if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_LocalAppData, 0, nullptr, &p))) {
+        auto title = g_cfg.value("/window/title"_json_pointer, std::string{"QQ"});
+        g_appDataDir = std::wstring(p) + L"\\" + U2W(title);
+        CoTaskMemFree(p);
+    } else {
+        g_appDataDir = exe_dir() + L"\\data";
+    }
+    fspath::create_directories(g_appDataDir);
+    return g_appDataDir;
+}
+
 // ================================================================
 //  Embedded resource loader (single-exe mode)
 // ================================================================
@@ -648,7 +663,7 @@ static void reg_shell_app() {
         return true;
     });
     ipc_on("app.dataDir", [](const json&) -> json {
-        return W2U(exe_dir() + L"\\data");
+        return W2U(app_data_dir());
     });
     ipc_on("window.startDrag", [](const json&) -> json {
         ReleaseCapture();
@@ -1268,7 +1283,7 @@ static void reg_log() {
         auto path = a.value("path", std::string{});
         if (path.empty()) {
             // Default to data/app.log
-            g_logFile = exe_dir() + L"\\data\\app.log";
+            g_logFile = app_data_dir() + L"\\app.log";
         } else {
             g_logFile = U2W(path);
         }
@@ -1366,20 +1381,19 @@ static void reg_updater() {
     ipc_on("app.downloadUpdate", [](const json& a) -> json {
         auto url = a.value("url", std::string{});
         if (url.empty()) throw std::runtime_error("url is required");
-        auto dest = exe_dir() + L"\\data\\update.exe";
-        fspath::create_directories(exe_dir() + L"\\data");
+        auto dest = app_data_dir() + L"\\update.exe";
         if (!downloadFile(url, dest)) throw std::runtime_error("Download failed");
         return W2U(dest);
     });
     ipc_on("app.installUpdate", [](const json&) -> json {
-        auto updateExe = exe_dir() + L"\\data\\update.exe";
+        auto updateExe = app_data_dir() + L"\\update.exe";
         if (!fspath::exists(updateExe))
             throw std::runtime_error("No update downloaded");
         wchar_t exePath[MAX_PATH];
         GetModuleFileNameW(nullptr, exePath, MAX_PATH);
         auto oldExe = std::wstring(exePath) + L".old";
         // Create a batch script to replace and restart
-        auto bat = exe_dir() + L"\\data\\update.bat";
+        auto bat = app_data_dir() + L"\\update.bat";
         std::ofstream f(bat);
         f << "@echo off\n";
         f << "timeout /t 1 /nobreak >nul\n";
@@ -1803,7 +1817,7 @@ static void setupWebView(ICoreWebView2Controller* ctrl) {
 }
 
 static void init_webview() {
-    auto dataDir = exe_dir() + L"\\data";
+    auto dataDir = app_data_dir();
     CreateCoreWebView2EnvironmentWithOptions(nullptr, dataDir.c_str(), nullptr,
         Callback<ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler>(
         [](HRESULT hr, ICoreWebView2Environment* env) -> HRESULT {
@@ -2184,8 +2198,7 @@ int WINAPI wWinMain(HINSTANCE hi, HINSTANCE, LPWSTR, int ns) {
         nullptr, nullptr, hi, nullptr);
 
     // Window state persistence — restore previous position/size
-    g_stateFile = exe_dir() + L"\\data\\window-state.json";
-    fspath::create_directories(exe_dir() + L"\\data");
+    g_stateFile = app_data_dir() + L"\\window-state.json";
     auto prevState = loadWindowState();
     if (!prevState.empty()) {
         int sx = prevState.value("x", 0);
