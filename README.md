@@ -1,6 +1,13 @@
 # 强强 (QiangQiang)
 
-[English](README.en.md) | **中文**
+[English](README.en.md) | **中文** | [LinuxDO](https://linux.do)
+
+<a href="https://paypal.me/koboling"><img src="https://img.shields.io/badge/PayPal-Sponsor-blue?logo=paypal" alt="PayPal"></a>
+
+<details>
+<summary>微信赞赏</summary>
+<img src="assets/wechat-sponsor.jpg" width="240" alt="微信赞赏码">
+</details>
 
 超轻量 Windows 桌面应用框架。C++ Win32 + WebView2 + Bun + TypeScript。
 

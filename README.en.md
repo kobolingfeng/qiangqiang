@@ -1,6 +1,13 @@
 # QiangQiang (强强)
 
-**English** | [中文](README.md)
+**English** | [中文](README.md) | [LinuxDO](https://linux.do)
+
+<a href="https://paypal.me/koboling"><img src="https://img.shields.io/badge/PayPal-Sponsor-blue?logo=paypal" alt="PayPal"></a>
+
+<details>
+<summary>WeChat Sponsor</summary>
+<img src="assets/wechat-sponsor.jpg" width="240" alt="WeChat QR">
+</details>
 
 Ultra-lightweight Windows desktop app framework. C++ Win32 + WebView2 + Bun + TypeScript.
 
