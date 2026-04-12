@@ -130,12 +130,13 @@ if (singleExe) {
     // Collect all files from dist/ into a pak archive
     // Format: "QQ" (2B) + fileCount (uint16) + [pathLen(uint16) + path + dataLen(uint32) + data]...
     const distFiles: { path: string; data: Buffer }[] = [];
+    const skipDirs = new Set(['data', 'EBWebView']);
     const collectFiles = (dir: string, prefix: string) => {
         for (const entry of readdirSync(dir, { withFileTypes: true })) {
             const full = join(dir, entry.name);
             const rel = prefix ? prefix + '/' + entry.name : entry.name;
             if (entry.isDirectory()) {
-                collectFiles(full, rel);
+                if (!skipDirs.has(entry.name)) collectFiles(full, rel);
             } else if (entry.name !== 'app.exe' && entry.name !== 'app.config.json') {
                 distFiles.push({ path: rel, data: readFileSync(full) });
             }

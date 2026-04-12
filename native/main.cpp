@@ -91,7 +91,7 @@ static ComPtr<ICoreWebView2Environment>  g_env;
 static ComPtr<ICoreWebView2Controller>   g_ctrl;
 static ComPtr<ICoreWebView2>             g_view;
 static std::wstring                      g_devUrl;
-static int                               g_showCmd = SW_SHOW;
+static bool                              g_webviewReady = false;
 
 // Config
 static json g_cfg;
@@ -1705,8 +1705,15 @@ static void setupWebView(ICoreWebView2Controller* ctrl) {
     g_ctrl = ctrl;
     g_ctrl->get_CoreWebView2(&g_view);
 
-    // Full client area — no border inset (composition mode handles input routing)
     RECT b; GetClientRect(g_hwnd, &b);
+    if (g_frameless) {
+        WINDOWPLACEMENT wp{sizeof(wp)};
+        GetWindowPlacement(g_hwnd, &wp);
+        if (wp.showCmd != SW_MAXIMIZE) {
+            b.left += g_borderSize; b.top += g_borderSize;
+            b.right -= g_borderSize; b.bottom -= g_borderSize;
+        }
+    }
     g_ctrl->put_Bounds(b);
 
     // Background color from config (alpha=255 for opaque)
@@ -1786,14 +1793,14 @@ static void setupWebView(ICoreWebView2Controller* ctrl) {
             g_view->Navigate(L"https://app.local/index.html");
         }
     }
-    // Show window after first navigation completes (instant-load feel)
     g_view->add_NavigationCompleted(
         Callback<ICoreWebView2NavigationCompletedEventHandler>(
         [](ICoreWebView2*, ICoreWebView2NavigationCompletedEventArgs*) -> HRESULT {
-            if (!IsWindowVisible(g_hwnd)) {
-                ShowWindow(g_hwnd, g_showCmd);
-                SetForegroundWindow(g_hwnd);
-            }
+            // Wails hack: Hide+Show WebView2 controller to force render
+            // https://github.com/MicrosoftEdge/WebView2Feedback/issues/1077
+            g_ctrl->put_IsVisible(FALSE);
+            g_ctrl->put_IsVisible(TRUE);
+            g_webviewReady = true;
             closeSplash();
             return S_OK;
         }).Get(), nullptr);
@@ -1812,44 +1819,6 @@ static void init_webview() {
                 return hr;
             }
             g_env = env;
-
-            // Try composition mode first (borderless WebView2)
-            ComPtr<ICoreWebView2Environment3> env3;
-            if (g_frameless && SUCCEEDED(env->QueryInterface(IID_PPV_ARGS(&env3)))) {
-                return env3->CreateCoreWebView2CompositionController(g_hwnd,
-                    Callback<ICoreWebView2CreateCoreWebView2CompositionControllerCompletedHandler>(
-                    [](HRESULT hr, ICoreWebView2CompositionController* compCtrl) -> HRESULT {
-                        if (FAILED(hr)) { PostQuitMessage(1); return hr; }
-                        g_compCtrl = compCtrl;
-
-                        // Get base controller interface
-                        ComPtr<ICoreWebView2Controller> ctrl;
-                        compCtrl->QueryInterface(IID_PPV_ARGS(&ctrl));
-
-                        // Set up DirectComposition visual tree
-                        DCompositionCreateDevice(nullptr, IID_PPV_ARGS(&g_dcompDevice));
-                        g_dcompDevice->CreateTargetForHwnd(g_hwnd, TRUE, &g_dcompTarget);
-                        g_dcompDevice->CreateVisual(&g_dcompVisual);
-                        g_dcompTarget->SetRoot(g_dcompVisual.Get());
-                        compCtrl->put_RootVisualTarget(g_dcompVisual.Get());
-                        g_dcompDevice->Commit();
-
-                        // Cursor changes
-                        compCtrl->add_CursorChanged(
-                            Callback<ICoreWebView2CursorChangedEventHandler>(
-                            [](ICoreWebView2CompositionController* sender, IUnknown*) -> HRESULT {
-                                HCURSOR cursor;
-                                if (SUCCEEDED(sender->get_Cursor(&cursor)) && cursor)
-                                    SetCursor(cursor);
-                                return S_OK;
-                            }).Get(), nullptr);
-
-                        setupWebView(ctrl.Get());
-                        return S_OK;
-                    }).Get());
-            }
-
-            // Fallback: windowed mode (non-frameless, or composition unsupported)
             return g_env->CreateCoreWebView2Controller(g_hwnd,
                 Callback<ICoreWebView2CreateCoreWebView2ControllerCompletedHandler>(
                 [](HRESULT hr, ICoreWebView2Controller* ctrl) -> HRESULT {
@@ -1892,64 +1861,17 @@ static LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM w, LPARAM l) {
         }
         break;
 
-    // ── Mouse forwarding for composition mode ──
-    case WM_MOUSEMOVE:
-    case WM_LBUTTONDOWN: case WM_LBUTTONUP: case WM_LBUTTONDBLCLK:
-    case WM_RBUTTONDOWN: case WM_RBUTTONUP: case WM_RBUTTONDBLCLK:
-    case WM_MBUTTONDOWN: case WM_MBUTTONUP: case WM_MBUTTONDBLCLK:
-    case WM_XBUTTONDOWN: case WM_XBUTTONUP: case WM_XBUTTONDBLCLK:
-    case WM_MOUSEWHEEL:  case WM_MOUSEHWHEEL:
-    case WM_MOUSELEAVE:
-        if (g_compCtrl) {
-            if (m == WM_MOUSEMOVE && !g_mouseTracking) {
-                TRACKMOUSEEVENT tme = { sizeof(tme), TME_LEAVE, h, 0 };
-                TrackMouseEvent(&tme);
-                g_mouseTracking = true;
-            }
-            if (m == WM_MOUSELEAVE) g_mouseTracking = false;
-
-            POINT pt;
-            UINT32 mouseData = 0;
-            auto vk = static_cast<COREWEBVIEW2_MOUSE_EVENT_VIRTUAL_KEYS>(GET_KEYSTATE_WPARAM(w));
-
-            if (m == WM_MOUSEWHEEL || m == WM_MOUSEHWHEEL) {
-                pt = {GET_X_LPARAM(l), GET_Y_LPARAM(l)};
-                ScreenToClient(h, &pt);
-                mouseData = GET_WHEEL_DELTA_WPARAM(w);
-            } else if (m == WM_XBUTTONDOWN || m == WM_XBUTTONUP || m == WM_XBUTTONDBLCLK) {
-                pt = {GET_X_LPARAM(l), GET_Y_LPARAM(l)};
-                mouseData = GET_XBUTTON_WPARAM(w);
-            } else if (m == WM_MOUSELEAVE) {
-                pt = {0, 0};
-                vk = COREWEBVIEW2_MOUSE_EVENT_VIRTUAL_KEYS_NONE;
-            } else {
-                pt = {GET_X_LPARAM(l), GET_Y_LPARAM(l)};
-            }
-
-            // Capture mouse on button down, release on button up
-            if (m == WM_LBUTTONDOWN || m == WM_MBUTTONDOWN || m == WM_RBUTTONDOWN || m == WM_XBUTTONDOWN)
-                SetCapture(h);
-            if (m == WM_LBUTTONUP || m == WM_MBUTTONUP || m == WM_RBUTTONUP || m == WM_XBUTTONUP)
-                ReleaseCapture();
-
-            g_compCtrl->SendMouseInput(static_cast<COREWEBVIEW2_MOUSE_EVENT_KIND>(m), vk, mouseData, pt);
-            return 0;
-        }
-        break;
-
-    case WM_SETCURSOR:
-        if (g_compCtrl && LOWORD(l) == HTCLIENT) {
-            HCURSOR cursor;
-            if (SUCCEEDED(g_compCtrl->get_Cursor(&cursor)) && cursor) {
-                SetCursor(cursor);
-                return TRUE;
-            }
-        }
-        break;
-
     case WM_SIZE:
         if (g_ctrl) {
             RECT b; GetClientRect(h, &b);
+            if (g_frameless) {
+                WINDOWPLACEMENT wp{sizeof(wp)};
+                GetWindowPlacement(h, &wp);
+                if (wp.showCmd != SW_MAXIMIZE) {
+                    b.left += g_borderSize; b.top += g_borderSize;
+                    b.right -= g_borderSize; b.bottom -= g_borderSize;
+                }
+            }
             g_ctrl->put_Bounds(b);
         }
         if (w == SIZE_MAXIMIZED)      ipc_emit("window.maximized");
@@ -2077,10 +1999,6 @@ static LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM w, LPARAM l) {
         }
         if (pt.x < B) return HTLEFT;
         if (pt.x > rc.right - B) return HTRIGHT;
-        // Composition mode: all content returns HTCLIENT; drag is handled
-        // by web content via window.startDrag()
-        if (g_compCtrl) return HTCLIENT;
-        // Windowed mode fallback: native title bar drag
         if (g_titleBarH > 0 && pt.y < g_titleBarH && pt.x < rc.right - 140)
             return HTCAPTION;
         return HTCLIENT;
@@ -2226,17 +2144,6 @@ int WINAPI wWinMain(HINSTANCE hi, HINSTANCE, LPWSTR, int ns) {
     // Enable file drag-drop
     DragAcceptFiles(g_hwnd, TRUE);
 
-    // Delay showing window until WebView2 content is ready (instant-load)
-    g_showCmd = ns;
-    // Safety timeout: show window after 3s even if navigation hasn't completed
-    SetTimer(g_hwnd, 98, 3000, [](HWND h, UINT, UINT_PTR id, DWORD) {
-        if (!IsWindowVisible(h)) {
-            ShowWindow(h, g_showCmd);
-            SetForegroundWindow(h);
-        }
-        KillTimer(h, id);
-    });
-
     // Register all commands
     reg_window();
     reg_dialog();
@@ -2265,7 +2172,14 @@ int WINAPI wWinMain(HINSTANCE hi, HINSTANCE, LPWSTR, int ns) {
 
     init_webview();
 
+    // Synchronous wait for WebView2 to be ready (like Wails)
     MSG msg;
+    while (!g_webviewReady && GetMessageW(&msg, nullptr, 0, 0)) {
+        TranslateMessage(&msg);
+        DispatchMessageW(&msg);
+    }
+    ShowWindow(g_hwnd, ns);
+
     while (GetMessageW(&msg, nullptr, 0, 0)) {
         TranslateMessage(&msg);
         DispatchMessageW(&msg);
