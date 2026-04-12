@@ -91,6 +91,7 @@ static ComPtr<ICoreWebView2Environment>  g_env;
 static ComPtr<ICoreWebView2Controller>   g_ctrl;
 static ComPtr<ICoreWebView2>             g_view;
 static std::wstring                      g_devUrl;
+static int                               g_showCmd = SW_SHOW;
 
 // Config
 static json g_cfg;
@@ -1788,7 +1789,17 @@ static void setupWebView(ICoreWebView2Controller* ctrl) {
             g_view->Navigate(L"https://app.local/index.html");
         }
     }
-    closeSplash();
+    // Show window after first navigation completes (instant-load feel)
+    g_view->add_NavigationCompleted(
+        Callback<ICoreWebView2NavigationCompletedEventHandler>(
+        [](ICoreWebView2*, ICoreWebView2NavigationCompletedEventArgs*) -> HRESULT {
+            if (!IsWindowVisible(g_hwnd)) {
+                ShowWindow(g_hwnd, g_showCmd);
+                SetForegroundWindow(g_hwnd);
+            }
+            closeSplash();
+            return S_OK;
+        }).Get(), nullptr);
 }
 
 static void init_webview() {
@@ -2219,7 +2230,9 @@ int WINAPI wWinMain(HINSTANCE hi, HINSTANCE, LPWSTR, int ns) {
     // Enable file drag-drop
     DragAcceptFiles(g_hwnd, TRUE);
 
-    ShowWindow(g_hwnd, ns);
+    // Delay showing window until WebView2 content is ready (instant-load)
+    g_showCmd = ns;
+    // Show splash immediately if configured (while WebView2 loads)
 
     // Register all commands
     reg_window();
