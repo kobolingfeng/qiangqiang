@@ -121,6 +121,9 @@ static HWND g_splash = nullptr;
 static std::wstring g_logFile;
 static std::mutex   g_logMtx;
 
+// Background brush for frameless border area
+static HBRUSH g_bgBrush = nullptr;
+
 // ================================================================
 //  Embedded resource loader (single-exe mode)
 // ================================================================
@@ -1319,7 +1322,7 @@ static void init_webview() {
 
 static LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM w, LPARAM l) {
     switch (m) {
-    // ── Suppress white border flash in frameless mode ──
+    // ── Fill frameless border area with background color ──
     case WM_NCPAINT:
         if (g_frameless) return 0;
         break;
@@ -1327,7 +1330,24 @@ static LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM w, LPARAM l) {
         if (g_frameless) return TRUE;
         break;
     case WM_ERASEBKGND:
-        if (g_frameless) return 1;
+        if (g_frameless && g_bgBrush) {
+            // Actually paint the background (the 6px border area needs this)
+            HDC hdc = (HDC)w;
+            RECT rc;
+            GetClientRect(h, &rc);
+            FillRect(hdc, &rc, g_bgBrush);
+            return 1;
+        }
+        break;
+    case WM_PAINT:
+        if (g_frameless && g_bgBrush) {
+            PAINTSTRUCT ps;
+            HDC hdc = BeginPaint(h, &ps);
+            // Fill only the border strips (not the WebView2 area)
+            FillRect(hdc, &ps.rcPaint, g_bgBrush);
+            EndPaint(h, &ps);
+            return 0;
+        }
         break;
 
     case WM_SIZE:
@@ -1555,10 +1575,28 @@ int WINAPI wWinMain(HINSTANCE hi, HINSTANCE, LPWSTR, int ns) {
             ns = SW_MAXIMIZE;
     }
 
-    // DWM shadow for frameless
+    // DWM attributes for frameless
     if (g_frameless) {
+        // Windows 11: remove DWM-drawn 1px border
+        // DWMWA_BORDER_COLOR = 34, DWMWA_COLOR_NONE = 0xFFFFFFFE
+        COLORREF clrNone = 0xFFFFFFFE;
+        DwmSetWindowAttribute(g_hwnd, 34, &clrNone, sizeof(clrNone));
+
+        // Dark mode DWM rendering
+        // DWMWA_USE_IMMERSIVE_DARK_MODE = 20
+        BOOL darkMode = TRUE;
+        DwmSetWindowAttribute(g_hwnd, 20, &darkMode, sizeof(darkMode));
+
+        // Set DWM caption color to match background (Win11)
+        // DWMWA_CAPTION_COLOR = 35
+        DwmSetWindowAttribute(g_hwnd, 35, &bgClr, sizeof(bgClr));
+
+        // Extend frame into client area for shadow effect
         MARGINS m = {0, 0, 0, 1};
         DwmExtendFrameIntoClientArea(g_hwnd, &m);
+
+        // Save background brush for WM_ERASEBKGND / WM_PAINT
+        g_bgBrush = CreateSolidBrush(bgClr);
     }
 
     // Enable file drag-drop

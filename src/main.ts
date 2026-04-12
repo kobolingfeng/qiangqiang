@@ -33,8 +33,12 @@ function log(text: string) {
 
 // ── Window ──────────────────────────────────
 document.getElementById('btn-title')!.addEventListener('click', async () => {
-    const title = prompt('新标题:') || '强强';
+    const title = window.prompt('新标题:');
+    if (!title) return;
     await win.setTitle(title);
+    // Also update custom titlebar text
+    const tb = document.querySelector('.titlebar-title');
+    if (tb) tb.textContent = title;
     log(`标题 → ${title}`);
 });
 

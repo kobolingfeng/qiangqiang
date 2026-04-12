@@ -1,4 +1,1 @@
-#include "resource.h"
 IDI_APP ICON "app.ico"
-IDR_HTML   RCDATA "_embedded.html"
-IDR_CONFIG RCDATA "_embedded.json"
