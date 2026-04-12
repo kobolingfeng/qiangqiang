@@ -1757,39 +1757,22 @@ static void setupWebView(ICoreWebView2Controller* ctrl) {
     } else {
 #ifdef SINGLE_EXE
         if (!g_pakEntries.empty()) {
-            // Serve embedded assets via resource interception
-            ComPtr<ICoreWebView2_2> v2;
-            if (SUCCEEDED(g_view.As(&v2))) {
-                v2->add_WebResourceRequested(
-                    Callback<ICoreWebView2WebResourceRequestedEventHandler>(
-                    [](ICoreWebView2*, ICoreWebView2WebResourceRequestedEventArgs* args) -> HRESULT {
-                        ComPtr<ICoreWebView2WebResourceRequest> req;
-                        args->get_Request(&req);
-                        LPWSTR uri; req->get_Uri(&uri);
-                        auto sUri = W2U(uri);
-                        CoTaskMemFree(uri);
-                        // Strip https://app.local/ prefix
-                        std::string path;
-                        auto prefix = std::string("https://app.local/");
-                        if (sUri.substr(0, prefix.size()) == prefix)
-                            path = sUri.substr(prefix.size());
-                        if (path.empty()) path = "index.html";
-
-                        auto* entry = findPakEntry(path);
-                        if (entry) {
-                            ComPtr<IStream> stream = SHCreateMemStream(
-                                (const BYTE*)entry->data, entry->size);
-                            auto mime = guessMimeType(path);
-                            ComPtr<ICoreWebView2WebResourceResponse> resp;
-                            g_env->CreateWebResourceResponse(
-                                stream.Get(), 200, L"OK", (L"Content-Type: " + mime).c_str(), &resp);
-                            args->put_Response(resp.Get());
-                        }
-                        return S_OK;
-                    }).Get(), nullptr);
-                g_view->AddWebResourceRequestedFilter(
-                    L"https://app.local/*", COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL);
+            // Extract pak to temp and serve via virtual host
+            wchar_t tempBuf[MAX_PATH];
+            GetTempPathW(MAX_PATH, tempBuf);
+            auto tempDir = std::wstring(tempBuf) + L"qqapp_embedded\\";
+            for (auto& e : g_pakEntries) {
+                auto filePath = tempDir + U2W(e.path);
+                auto parent = fspath::path(filePath).parent_path();
+                fspath::create_directories(parent);
+                std::ofstream f(filePath, std::ios::binary | std::ios::trunc);
+                f.write(e.data, e.size);
             }
+            ComPtr<ICoreWebView2_3> v3;
+            if (SUCCEEDED(g_view.As(&v3)))
+                v3->SetVirtualHostNameToFolderMapping(
+                    L"app.local", tempDir.c_str(),
+                    COREWEBVIEW2_HOST_RESOURCE_ACCESS_KIND_ALLOW);
             g_view->Navigate(L"https://app.local/index.html");
         } else
 #endif
