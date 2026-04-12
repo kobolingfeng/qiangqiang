@@ -4,11 +4,13 @@
 
 ---
 
-❤️ **这个项目由一个人利用业余时间开发和维护。如果它对你有用，请考虑赞助支持，让我能继续做下去！**
+❤️ **这个项目由一个人利用业余时间开发和维护。如果它对你有用，请考虑赞助或贡献代码，让这个项目能继续发展下去！**
 
 <a href="https://paypal.me/koboling"><img src="https://img.shields.io/badge/PayPal-赞助-blue?logo=paypal&style=for-the-badge" alt="PayPal 赞助"></a>
 
 <img src="assets/wechat-sponsor.jpg" width="240" alt="微信赞赏码">
+
+🙏 **欢迎贡献！** 无论是提 Issue、提交 PR、完善文档还是分享使用经验，都非常欢迎。一个人的精力有限，希望能和更多人一起把强强做得更好。
 
 ---
 

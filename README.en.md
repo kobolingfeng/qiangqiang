@@ -4,11 +4,13 @@
 
 ---
 
-❤️ **This project is built and maintained by one person in spare time. If you find it useful, please consider sponsoring to keep it going!**
+❤️ **This project is built and maintained by one person in spare time. If you find it useful, please consider sponsoring or contributing to help it grow!**
 
 <a href="https://paypal.me/koboling"><img src="https://img.shields.io/badge/PayPal-Sponsor-blue?logo=paypal&style=for-the-badge" alt="PayPal Sponsor"></a>
 
 <img src="assets/wechat-sponsor.jpg" width="240" alt="WeChat Sponsor QR">
+
+🙏 **Contributions welcome!** Whether it's filing issues, submitting PRs, improving docs, or sharing your experience — all contributions are greatly appreciated. One person can only do so much — let's build QiangQiang together.
 
 ---
 
