@@ -2232,7 +2232,14 @@ int WINAPI wWinMain(HINSTANCE hi, HINSTANCE, LPWSTR, int ns) {
 
     // Delay showing window until WebView2 content is ready (instant-load)
     g_showCmd = ns;
-    // Show splash immediately if configured (while WebView2 loads)
+    // Safety timeout: show window after 3s even if navigation hasn't completed
+    SetTimer(g_hwnd, 98, 3000, [](HWND h, UINT, UINT_PTR id, DWORD) {
+        if (!IsWindowVisible(h)) {
+            ShowWindow(h, g_showCmd);
+            SetForegroundWindow(h);
+        }
+        KillTimer(h, id);
+    });
 
     // Register all commands
     reg_window();
