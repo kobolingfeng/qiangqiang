@@ -210,8 +210,9 @@ export const http = {
 // ── OS Info ───────────────────────────────────
 
 export const os = {
-    platform:   () => invoke<string>('os.platform'),
-    isDarkMode: () => invoke<boolean>('os.isDarkMode'),
+    platform:       () => invoke<string>('os.platform'),
+    isDarkMode:     () => invoke<boolean>('os.isDarkMode'),
+    onThemeChanged: (h: (data: { dark: boolean }) => void) => on('os.themeChanged', h),
     arch:     () => invoke<string>('os.arch'),
     version:  () => invoke<string>('os.version'),
     hostname: () => invoke<string>('os.hostname'),

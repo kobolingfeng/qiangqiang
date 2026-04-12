@@ -35,14 +35,12 @@
 #include <windowsx.h>
 #include <winhttp.h>
 #include <mutex>
-#include <dcomp.h>
-
+#include <atomic>
 #pragma comment(lib, "shlwapi.lib")
 #pragma comment(lib, "shell32.lib")
 #pragma comment(lib, "ole32.lib")
 #pragma comment(lib, "dwmapi.lib")
 #pragma comment(lib, "winhttp.lib")
-#pragma comment(lib, "dcomp.lib")
 
 #ifdef SINGLE_EXE
 #include "resource.h"
@@ -112,7 +110,7 @@ struct FileWatcher {
     HANDLE hThread;
     std::wstring path;
     int id;
-    bool active;
+    std::atomic<bool> active;
 };
 static std::unordered_map<int, FileWatcher*> g_watchers;
 static int g_nextWatchId = 1;
@@ -146,12 +144,6 @@ static std::string g_pakData;
 static std::vector<PakEntry> g_pakEntries;
 #endif
 
-// Composition mode (borderless WebView2)
-static ComPtr<ICoreWebView2CompositionController> g_compCtrl;
-static ComPtr<IDCompositionDevice>   g_dcompDevice;
-static ComPtr<IDCompositionTarget>   g_dcompTarget;
-static ComPtr<IDCompositionVisual>   g_dcompVisual;
-static bool g_mouseTracking = false;
 
 static std::wstring g_appDataDir;
 static std::wstring app_data_dir() {
@@ -185,13 +177,18 @@ static std::string loadResource(int id) {
 
 static void loadPak() {
     g_pakData = loadResource(IDR_HTML);
-    if (g_pakData.size() < 4 || g_pakData.substr(0,2) != "QQ") return;
+    const char* end = g_pakData.data() + g_pakData.size();
+    if (g_pakData.size() < 4 || g_pakData[0] != 'Q' || g_pakData[1] != 'Q') return;
     const char* p = g_pakData.data() + 2;
-    uint16_t count = *(uint16_t*)p; p += 2;
-    for (uint16_t i = 0; i < count; i++) {
-        uint16_t pathLen = *(uint16_t*)p; p += 2;
+    uint16_t count; memcpy(&count, p, 2); p += 2;
+    for (uint16_t i = 0; i < count && p < end; i++) {
+        if (p + 2 > end) break;
+        uint16_t pathLen; memcpy(&pathLen, p, 2); p += 2;
+        if (p + pathLen > end) break;
         std::string path(p, pathLen); p += pathLen;
-        uint32_t dataLen = *(uint32_t*)p; p += 4;
+        if (p + 4 > end) break;
+        uint32_t dataLen; memcpy(&dataLen, p, 4); p += 4;
+        if (p + dataLen > end) break;
         g_pakEntries.push_back({path, p, dataLen});
         p += dataLen;
     }
@@ -576,7 +573,10 @@ static void reg_fs() {
         return true;
     });
     ipc_on("fs.remove", [](const json& a) -> json {
-        fspath::remove_all(U2W(a.value("path", std::string{})));
+        auto path = a.value("path", std::string{});
+        if (path.empty() || path == "/" || path == "\\" || (path.size() <= 3 && path[1] == ':'))
+            throw std::runtime_error("Refusing to remove root/drive path");
+        fspath::remove_all(U2W(path));
         return true;
     });
     ipc_on("fs.rename", [](const json& a) -> json {
@@ -1613,8 +1613,22 @@ static void reg_extras() {
             return result;
         };
 
+        // Read stderr in a background thread to prevent pipe deadlock
+        struct PipeCtx { HANDLE h; std::string data; };
+        auto* errCtx = new PipeCtx{hErrR, {}};
+        HANDLE hErrThread = CreateThread(nullptr, 0, [](LPVOID p) -> DWORD {
+            auto* c = (PipeCtx*)p;
+            char buf[4096]; DWORD rd;
+            while (ReadFile(c->h, buf, sizeof(buf), &rd, nullptr) && rd > 0)
+                c->data.append(buf, rd);
+            CloseHandle(c->h);
+            return 0;
+        }, errCtx, 0, nullptr);
         auto stdout_ = readPipe(hOutR);
-        auto stderr_ = readPipe(hErrR);
+        WaitForSingleObject(hErrThread, INFINITE);
+        CloseHandle(hErrThread);
+        auto stderr_ = std::move(errCtx->data);
+        delete errCtx;
         WaitForSingleObject(pi.hProcess, INFINITE);
         DWORD exitCode;
         GetExitCodeProcess(pi.hProcess, &exitCode);
@@ -1725,9 +1739,11 @@ static void setupWebView(ICoreWebView2Controller* ctrl) {
         ctrl2->put_DefaultBackgroundColor({alpha, GetRValue(clr), GetGValue(clr), GetBValue(clr)});
     }
 
-    // DPI-aware rasterization
+    // Wails: use raw pixels mode for better resize performance
     ComPtr<ICoreWebView2Controller3> ctrl3;
     if (SUCCEEDED(g_ctrl.As(&ctrl3))) {
+        ctrl3->put_BoundsMode(COREWEBVIEW2_BOUNDS_MODE_USE_RAW_PIXELS);
+        ctrl3->put_ShouldDetectMonitorScaleChanges(FALSE);
         UINT dpi = GetDpiForWindow(g_hwnd);
         ctrl3->put_RasterizationScale(dpi / 96.0);
     }
@@ -1743,10 +1759,46 @@ static void setupWebView(ICoreWebView2Controller* ctrl) {
     s->put_AreDefaultContextMenusEnabled(dev ? TRUE : FALSE);
     s->put_IsStatusBarEnabled(FALSE);
 
+    // Wails-aligned: disable browser shortcuts (Ctrl+P, Ctrl+S, etc.)
+    ComPtr<ICoreWebView2Settings3> s3;
+    if (SUCCEEDED(s.As(&s3)))
+        s3->put_AreBrowserAcceleratorKeysEnabled(FALSE);
+
+    // Disable swipe navigation (prevents accidental back/forward on touchpad)
+    ComPtr<ICoreWebView2Settings6> s6;
+    if (SUCCEEDED(s.As(&s6)))
+        s6->put_IsSwipeNavigationEnabled(FALSE);
+
+    // Disable pinch zoom (desktop apps usually don't need it)
+    ComPtr<ICoreWebView2Settings5> s5;
+    if (SUCCEEDED(s.As(&s5)))
+        s5->put_IsPinchZoomEnabled(FALSE);
+
     // Enable CSS app-region:drag for declarative title bar drag
     ComPtr<ICoreWebView2Settings9> s9;
     if (SUCCEEDED(s.As(&s9)))
         s9->put_IsNonClientRegionSupportEnabled(TRUE);
+
+    // Auto-allow permissions (camera, microphone, etc.) without prompts
+    g_view->add_PermissionRequested(
+        Callback<ICoreWebView2PermissionRequestedEventHandler>(
+        [](ICoreWebView2*, ICoreWebView2PermissionRequestedEventArgs* args) -> HRESULT {
+            args->put_State(COREWEBVIEW2_PERMISSION_STATE_ALLOW);
+            return S_OK;
+        }).Get(), nullptr);
+
+    // Process crash recovery
+    g_view->add_ProcessFailed(
+        Callback<ICoreWebView2ProcessFailedEventHandler>(
+        [](ICoreWebView2*, ICoreWebView2ProcessFailedEventArgs* args) -> HRESULT {
+            COREWEBVIEW2_PROCESS_FAILED_KIND kind;
+            args->get_ProcessFailedKind(&kind);
+            if (kind == COREWEBVIEW2_PROCESS_FAILED_KIND_BROWSER_PROCESS_EXITED) {
+                MessageBoxW(g_hwnd, L"WebView2 进程已崩溃，应用将关闭。", L"错误", MB_ICONERROR);
+                PostQuitMessage(1);
+            }
+            return S_OK;
+        }).Get(), nullptr);
 
     // IPC handler
     g_view->add_WebMessageReceived(
@@ -1891,7 +1943,31 @@ static LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM w, LPARAM l) {
         return 0;
 
     case WM_MOVE:
-        ipc_emit("window.moved", {{"x", (int)(short)LOWORD(l)}, {"y", (int)(short)HIWORD(l)}});
+    case WM_MOVING:
+        // Wails: notify WebView2 of position changes (fixes popup positioning)
+        if (g_ctrl) {
+            ComPtr<ICoreWebView2Controller3> ctrl3;
+            if (SUCCEEDED(g_ctrl.As(&ctrl3)))
+                ctrl3->NotifyParentWindowPositionChanged();
+        }
+        if (m == WM_MOVE)
+            ipc_emit("window.moved", {{"x", (int)(short)LOWORD(l)}, {"y", (int)(short)HIWORD(l)}});
+        return 0;
+
+    case WM_SETTINGCHANGE:
+        if (l) {
+            auto setting = W2U((LPCWSTR)l);
+            if (setting == "ImmersiveColorSet") {
+                HKEY hKey; DWORD val = 1, sz = sizeof(val);
+                if (RegOpenKeyExW(HKEY_CURRENT_USER,
+                    L"Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize",
+                    0, KEY_READ, &hKey) == ERROR_SUCCESS) {
+                    RegQueryValueExW(hKey, L"AppsUseLightTheme", nullptr, nullptr, (BYTE*)&val, &sz);
+                    RegCloseKey(hKey);
+                }
+                ipc_emit("os.themeChanged", {{"dark", val == 0}});
+            }
+        }
         return 0;
     case WM_SETFOCUS:
         if (g_ctrl) g_ctrl->MoveFocus(COREWEBVIEW2_MOVE_FOCUS_REASON_PROGRAMMATIC);
@@ -1982,6 +2058,9 @@ static LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM w, LPARAM l) {
 
     case WM_NCHITTEST: {
         if (!g_frameless) break;
+        WINDOWPLACEMENT wp{sizeof(wp)};
+        GetWindowPlacement(h, &wp);
+        if (wp.showCmd == SW_MAXIMIZE) return HTCLIENT;
         POINT pt = { GET_X_LPARAM(l), GET_Y_LPARAM(l) };
         ScreenToClient(h, &pt);
         RECT rc; GetClientRect(h, &rc);
