@@ -42,9 +42,7 @@
 #pragma comment(lib, "dwmapi.lib")
 #pragma comment(lib, "winhttp.lib")
 
-#ifdef SINGLE_EXE
 #include "resource.h"
-#endif
 
 #include "json.hpp"
 using json = nlohmann::json;
@@ -2160,8 +2158,8 @@ int WINAPI wWinMain(HINSTANCE hi, HINSTANCE, LPWSTR, int ns) {
     wc.hCursor        = LoadCursorW(nullptr, IDC_ARROW);
     wc.hbrBackground  = CreateSolidBrush(bgClr);
     // Try custom icon from resource, fallback to default
-    wc.hIcon   = LoadIconW(hi, L"IDI_APP");
-    wc.hIconSm = LoadIconW(hi, L"IDI_APP");
+    wc.hIcon   = LoadIconW(hi, MAKEINTRESOURCE(IDI_APP));
+    wc.hIconSm = LoadIconW(hi, MAKEINTRESOURCE(IDI_APP));
     if (!wc.hIcon) {
         wc.hIcon   = LoadIconW(nullptr, IDI_APPLICATION);
         wc.hIconSm = LoadIconW(nullptr, IDI_APPLICATION);
