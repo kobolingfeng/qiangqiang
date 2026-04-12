@@ -35,12 +35,14 @@
 #include <windowsx.h>
 #include <winhttp.h>
 #include <mutex>
+#include <dcomp.h>
 
 #pragma comment(lib, "shlwapi.lib")
 #pragma comment(lib, "shell32.lib")
 #pragma comment(lib, "ole32.lib")
 #pragma comment(lib, "dwmapi.lib")
 #pragma comment(lib, "winhttp.lib")
+#pragma comment(lib, "dcomp.lib")
 
 #ifdef SINGLE_EXE
 #include "resource.h"
@@ -95,6 +97,7 @@ static json g_cfg;
 static bool g_frameless    = false;
 static int  g_titleBarH    = 0;
 static int  g_borderSize   = 6;
+static int  g_effectType   = 0; // 0=none, 2=mica, 3=acrylic, 4=micaAlt
 
 // Tray
 #define WM_TRAYICON (WM_USER + 1)
@@ -124,6 +127,20 @@ static std::mutex   g_logMtx;
 // Background brush for frameless border area
 static HBRUSH g_bgBrush = nullptr;
 
+// Embedded assets (single-exe mode) — declared here, defined after loadResource
+#ifdef SINGLE_EXE
+struct PakEntry { std::string path; const char* data; uint32_t size; };
+static std::string g_pakData;
+static std::vector<PakEntry> g_pakEntries;
+#endif
+
+// Composition mode (borderless WebView2)
+static ComPtr<ICoreWebView2CompositionController> g_compCtrl;
+static ComPtr<IDCompositionDevice>   g_dcompDevice;
+static ComPtr<IDCompositionTarget>   g_dcompTarget;
+static ComPtr<IDCompositionVisual>   g_dcompVisual;
+static bool g_mouseTracking = false;
+
 // ================================================================
 //  Embedded resource loader (single-exe mode)
 // ================================================================
@@ -137,6 +154,43 @@ static std::string loadResource(int id) {
     DWORD sz = SizeofResource(nullptr, hRes);
     auto* ptr = (const char*)LockResource(hData);
     return std::string(ptr, sz);
+}
+
+static void loadPak() {
+    g_pakData = loadResource(IDR_HTML);
+    if (g_pakData.size() < 4 || g_pakData.substr(0,2) != "QQ") return;
+    const char* p = g_pakData.data() + 2;
+    uint16_t count = *(uint16_t*)p; p += 2;
+    for (uint16_t i = 0; i < count; i++) {
+        uint16_t pathLen = *(uint16_t*)p; p += 2;
+        std::string path(p, pathLen); p += pathLen;
+        uint32_t dataLen = *(uint32_t*)p; p += 4;
+        g_pakEntries.push_back({path, p, dataLen});
+        p += dataLen;
+    }
+}
+
+static const PakEntry* findPakEntry(const std::string& path) {
+    for (auto& e : g_pakEntries)
+        if (e.path == path) return &e;
+    return nullptr;
+}
+
+static std::wstring guessMimeType(const std::string& path) {
+    auto ext = path.substr(path.rfind('.') + 1);
+    if (ext == "html" || ext == "htm") return L"text/html";
+    if (ext == "js" || ext == "mjs")   return L"application/javascript";
+    if (ext == "css")                  return L"text/css";
+    if (ext == "json")                 return L"application/json";
+    if (ext == "svg")                  return L"image/svg+xml";
+    if (ext == "png")                  return L"image/png";
+    if (ext == "jpg" || ext == "jpeg") return L"image/jpeg";
+    if (ext == "gif")                  return L"image/gif";
+    if (ext == "ico")                  return L"image/x-icon";
+    if (ext == "woff2")                return L"font/woff2";
+    if (ext == "woff")                 return L"font/woff";
+    if (ext == "ttf")                  return L"font/ttf";
+    return L"application/octet-stream";
 }
 #endif
 
@@ -152,6 +206,31 @@ static COLORREF parseHexColor(const std::string& hex, COLORREF def = RGB(26,26,4
         int b = std::stoi(hex.substr(5,2), nullptr, 16);
         return RGB(r, g, b);
     } catch (...) { return def; }
+}
+
+static int parseEffectType(const std::string& name) {
+    if (name == "mica")     return 2;
+    if (name == "acrylic")  return 3;
+    if (name == "micaAlt" || name == "tabbed") return 4;
+    return 0;
+}
+
+static void applyWindowEffect(HWND hwnd, int effectType) {
+    // DWMWA_SYSTEMBACKDROP_TYPE = 38 (Windows 11 22H2+)
+    DwmSetWindowAttribute(hwnd, 38, &effectType, sizeof(effectType));
+    if (effectType >= 2) {
+        MARGINS m = {-1, -1, -1, -1};
+        DwmExtendFrameIntoClientArea(hwnd, &m);
+    }
+    if (g_ctrl) {
+        ComPtr<ICoreWebView2Controller2> ctrl2;
+        if (SUCCEEDED(g_ctrl.As(&ctrl2))) {
+            BYTE alpha = (effectType >= 2) ? 0 : 255;
+            auto hex = g_cfg.value("/window/backgroundColor"_json_pointer, std::string{"#1a1a2e"});
+            auto clr = parseHexColor(hex);
+            ctrl2->put_DefaultBackgroundColor({alpha, GetRValue(clr), GetGValue(clr), GetBValue(clr)});
+        }
+    }
 }
 
 static json loadConfig(const std::wstring& dir) {
@@ -280,6 +359,35 @@ static void reg_window() {
         WINDOWPLACEMENT wp{sizeof(wp)};
         GetWindowPlacement(g_hwnd, &wp);
         return wp.showCmd == SW_MAXIMIZE;
+    });
+    ipc_on("window.setEffect", [](const json& a) -> json {
+        auto name = a.value("effect", std::string{"none"});
+        g_effectType = parseEffectType(name);
+        applyWindowEffect(g_hwnd, g_effectType);
+        return true;
+    });
+    ipc_on("window.setBackgroundColor", [](const json& a) -> json {
+        auto hex = a.value("color", std::string{});
+        if (hex.empty()) return false;
+        COLORREF clr = parseHexColor(hex);
+        // Update DWM border + caption colors
+        if (g_frameless) {
+            int lum = (GetRValue(clr)*299 + GetGValue(clr)*587 + GetBValue(clr)*114) / 1000;
+            BOOL dark = (lum < 128) ? TRUE : FALSE;
+            DwmSetWindowAttribute(g_hwnd, 20, &dark, sizeof(dark));
+            DwmSetWindowAttribute(g_hwnd, 34, &clr, sizeof(clr));
+            DwmSetWindowAttribute(g_hwnd, 35, &clr, sizeof(clr));
+            if (g_bgBrush) DeleteObject(g_bgBrush);
+            g_bgBrush = CreateSolidBrush(clr);
+            InvalidateRect(g_hwnd, nullptr, TRUE);
+        }
+        // Update WebView2 default background
+        if (g_ctrl) {
+            ComPtr<ICoreWebView2Controller2> ctrl2;
+            if (SUCCEEDED(g_ctrl.As(&ctrl2)))
+                ctrl2->put_DefaultBackgroundColor({255, GetRValue(clr), GetGValue(clr), GetBValue(clr)});
+        }
+        return true;
     });
 }
 
@@ -1231,6 +1339,111 @@ static void closeSplash() {
 //  WebView2 initialization
 // ================================================================
 
+static void setupWebView(ICoreWebView2Controller* ctrl) {
+    g_ctrl = ctrl;
+    g_ctrl->get_CoreWebView2(&g_view);
+
+    // Full client area — no border inset (composition mode handles input routing)
+    RECT b; GetClientRect(g_hwnd, &b);
+    g_ctrl->put_Bounds(b);
+
+    // Background color from config (alpha=255 for opaque)
+    ComPtr<ICoreWebView2Controller2> ctrl2;
+    if (SUCCEEDED(g_ctrl.As(&ctrl2))) {
+        auto hex = g_cfg.value("/window/backgroundColor"_json_pointer, std::string{"#1a1a2e"});
+        auto clr = parseHexColor(hex);
+        BYTE alpha = (g_effectType >= 2) ? 0 : 255;
+        ctrl2->put_DefaultBackgroundColor({alpha, GetRValue(clr), GetGValue(clr), GetBValue(clr)});
+    }
+
+    // DPI-aware rasterization
+    ComPtr<ICoreWebView2Controller3> ctrl3;
+    if (SUCCEEDED(g_ctrl.As(&ctrl3))) {
+        UINT dpi = GetDpiForWindow(g_hwnd);
+        ctrl3->put_RasterizationScale(dpi / 96.0);
+    }
+
+    // Settings
+    ComPtr<ICoreWebView2Settings> s;
+    g_view->get_Settings(&s);
+    s->put_IsScriptEnabled(TRUE);
+    s->put_AreDefaultScriptDialogsEnabled(TRUE);
+    s->put_IsWebMessageEnabled(TRUE);
+    bool dev = !g_devUrl.empty();
+    s->put_AreDevToolsEnabled(dev ? TRUE : FALSE);
+    s->put_AreDefaultContextMenusEnabled(dev ? TRUE : FALSE);
+    s->put_IsStatusBarEnabled(FALSE);
+
+    // Enable CSS app-region:drag for declarative title bar drag
+    ComPtr<ICoreWebView2Settings9> s9;
+    if (SUCCEEDED(s.As(&s9)))
+        s9->put_IsNonClientRegionSupportEnabled(TRUE);
+
+    // IPC handler
+    g_view->add_WebMessageReceived(
+        Callback<ICoreWebView2WebMessageReceivedEventHandler>(
+        [](ICoreWebView2*, ICoreWebView2WebMessageReceivedEventArgs* a) -> HRESULT {
+            LPWSTR m; a->get_WebMessageAsJson(&m);
+            ipc_dispatch(m);
+            CoTaskMemFree(m);
+            return S_OK;
+        }).Get(), nullptr);
+
+    // Navigate
+    if (dev) {
+        g_view->Navigate(g_devUrl.c_str());
+    } else {
+#ifdef SINGLE_EXE
+        if (!g_pakEntries.empty()) {
+            // Serve embedded assets via resource interception
+            ComPtr<ICoreWebView2_2> v2;
+            if (SUCCEEDED(g_view.As(&v2))) {
+                v2->add_WebResourceRequested(
+                    Callback<ICoreWebView2WebResourceRequestedEventHandler>(
+                    [](ICoreWebView2*, ICoreWebView2WebResourceRequestedEventArgs* args) -> HRESULT {
+                        ComPtr<ICoreWebView2WebResourceRequest> req;
+                        args->get_Request(&req);
+                        LPWSTR uri; req->get_Uri(&uri);
+                        auto sUri = W2U(uri);
+                        CoTaskMemFree(uri);
+                        // Strip https://app.local/ prefix
+                        std::string path;
+                        auto prefix = std::string("https://app.local/");
+                        if (sUri.substr(0, prefix.size()) == prefix)
+                            path = sUri.substr(prefix.size());
+                        if (path.empty()) path = "index.html";
+
+                        auto* entry = findPakEntry(path);
+                        if (entry) {
+                            ComPtr<IStream> stream = SHCreateMemStream(
+                                (const BYTE*)entry->data, entry->size);
+                            auto mime = guessMimeType(path);
+                            ComPtr<ICoreWebView2WebResourceResponse> resp;
+                            g_env->CreateWebResourceResponse(
+                                stream.Get(), 200, L"OK", (L"Content-Type: " + mime).c_str(), &resp);
+                            args->put_Response(resp.Get());
+                        }
+                        return S_OK;
+                    }).Get(), nullptr);
+                g_view->AddWebResourceRequestedFilter(
+                    L"https://app.local/*", COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL);
+            }
+            g_view->Navigate(L"https://app.local/index.html");
+        } else
+#endif
+        {
+            auto dir = exe_dir();
+            ComPtr<ICoreWebView2_3> v3;
+            if (SUCCEEDED(g_view.As(&v3)))
+                v3->SetVirtualHostNameToFolderMapping(
+                    L"app.local", dir.c_str(),
+                    COREWEBVIEW2_HOST_RESOURCE_ACCESS_KIND_ALLOW);
+            g_view->Navigate(L"https://app.local/index.html");
+        }
+    }
+    closeSplash();
+}
+
 static void init_webview() {
     auto dataDir = exe_dir() + L"\\data";
     CreateCoreWebView2EnvironmentWithOptions(nullptr, dataDir.c_str(), nullptr,
@@ -1244,73 +1457,49 @@ static void init_webview() {
                 return hr;
             }
             g_env = env;
+
+            // Try composition mode first (borderless WebView2)
+            ComPtr<ICoreWebView2Environment3> env3;
+            if (g_frameless && SUCCEEDED(env->QueryInterface(IID_PPV_ARGS(&env3)))) {
+                return env3->CreateCoreWebView2CompositionController(g_hwnd,
+                    Callback<ICoreWebView2CreateCoreWebView2CompositionControllerCompletedHandler>(
+                    [](HRESULT hr, ICoreWebView2CompositionController* compCtrl) -> HRESULT {
+                        if (FAILED(hr)) { PostQuitMessage(1); return hr; }
+                        g_compCtrl = compCtrl;
+
+                        // Get base controller interface
+                        ComPtr<ICoreWebView2Controller> ctrl;
+                        compCtrl->QueryInterface(IID_PPV_ARGS(&ctrl));
+
+                        // Set up DirectComposition visual tree
+                        DCompositionCreateDevice(nullptr, IID_PPV_ARGS(&g_dcompDevice));
+                        g_dcompDevice->CreateTargetForHwnd(g_hwnd, TRUE, &g_dcompTarget);
+                        g_dcompDevice->CreateVisual(&g_dcompVisual);
+                        g_dcompTarget->SetRoot(g_dcompVisual.Get());
+                        compCtrl->put_RootVisualTarget(g_dcompVisual.Get());
+                        g_dcompDevice->Commit();
+
+                        // Cursor changes
+                        compCtrl->add_CursorChanged(
+                            Callback<ICoreWebView2CursorChangedEventHandler>(
+                            [](ICoreWebView2CompositionController* sender, IUnknown*) -> HRESULT {
+                                HCURSOR cursor;
+                                if (SUCCEEDED(sender->get_Cursor(&cursor)) && cursor)
+                                    SetCursor(cursor);
+                                return S_OK;
+                            }).Get(), nullptr);
+
+                        setupWebView(ctrl.Get());
+                        return S_OK;
+                    }).Get());
+            }
+
+            // Fallback: windowed mode (non-frameless, or composition unsupported)
             return g_env->CreateCoreWebView2Controller(g_hwnd,
                 Callback<ICoreWebView2CreateCoreWebView2ControllerCompletedHandler>(
                 [](HRESULT hr, ICoreWebView2Controller* ctrl) -> HRESULT {
                     if (FAILED(hr)) { PostQuitMessage(1); return hr; }
-                    g_ctrl = ctrl;
-                    g_ctrl->get_CoreWebView2(&g_view);
-
-                    RECT b; GetClientRect(g_hwnd, &b);
-                    if (g_frameless) {
-                        b.left += g_borderSize; b.top += g_borderSize;
-                        b.right -= g_borderSize; b.bottom -= g_borderSize;
-                    }
-                    g_ctrl->put_Bounds(b);
-
-                    // Background color from config
-                    ComPtr<ICoreWebView2Controller2> ctrl2;
-                    if (SUCCEEDED(g_ctrl.As(&ctrl2))) {
-                        auto hex = g_cfg.value("/window/backgroundColor"_json_pointer, std::string{"#1a1a2e"});
-                        int r=26,g=26,b=46;
-                        if (hex.size()>=7) { r=std::stoi(hex.substr(1,2),0,16); g=std::stoi(hex.substr(3,2),0,16); b=std::stoi(hex.substr(5,2),0,16); }
-                        ctrl2->put_DefaultBackgroundColor({0,(BYTE)r,(BYTE)g,(BYTE)b});
-                    }
-
-                    // Settings
-                    ComPtr<ICoreWebView2Settings> s;
-                    g_view->get_Settings(&s);
-                    s->put_IsScriptEnabled(TRUE);
-                    s->put_AreDefaultScriptDialogsEnabled(TRUE);
-                    s->put_IsWebMessageEnabled(TRUE);
-                    bool dev = !g_devUrl.empty();
-                    s->put_AreDevToolsEnabled(dev ? TRUE : FALSE);
-                    s->put_AreDefaultContextMenusEnabled(dev ? TRUE : FALSE);
-                    s->put_IsStatusBarEnabled(FALSE);
-
-                    // IPC handler
-                    g_view->add_WebMessageReceived(
-                        Callback<ICoreWebView2WebMessageReceivedEventHandler>(
-                        [](ICoreWebView2*, ICoreWebView2WebMessageReceivedEventArgs* a) -> HRESULT {
-                            LPWSTR m; a->get_WebMessageAsJson(&m);
-                            ipc_dispatch(m);
-                            CoTaskMemFree(m);
-                            return S_OK;
-                        }).Get(), nullptr);
-
-                    // Navigate
-                    if (dev) {
-                        g_view->Navigate(g_devUrl.c_str());
-                    } else {
-#ifdef SINGLE_EXE
-                        // Try embedded HTML first, fallback to virtual host
-                        auto embeddedHtml = loadResource(IDR_HTML);
-                        if (!embeddedHtml.empty()) {
-                            g_view->NavigateToString(U2W(embeddedHtml).c_str());
-                        } else
-#endif
-                        {
-                            auto dir = exe_dir();
-                            ComPtr<ICoreWebView2_3> v3;
-                            if (SUCCEEDED(g_view.As(&v3)))
-                                v3->SetVirtualHostNameToFolderMapping(
-                                    L"app.local", dir.c_str(),
-                                    COREWEBVIEW2_HOST_RESOURCE_ACCESS_KIND_ALLOW);
-                            g_view->Navigate(L"https://app.local/index.html");
-                        }
-                    }
-                    // Close splash once WebView2 is ready
-                    closeSplash();
+                    setupWebView(ctrl);
                     return S_OK;
                 }).Get());
         }).Get());
@@ -1322,7 +1511,7 @@ static void init_webview() {
 
 static LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM w, LPARAM l) {
     switch (m) {
-    // ── Fill frameless border area with background color ──
+    // ── Fill background (visible briefly before WebView2 content loads) ──
     case WM_NCPAINT:
         if (g_frameless) return 0;
         break;
@@ -1331,7 +1520,6 @@ static LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM w, LPARAM l) {
         break;
     case WM_ERASEBKGND:
         if (g_frameless && g_bgBrush) {
-            // Actually paint the background (the 6px border area needs this)
             HDC hdc = (HDC)w;
             RECT rc;
             GetClientRect(h, &rc);
@@ -1343,32 +1531,93 @@ static LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM w, LPARAM l) {
         if (g_frameless && g_bgBrush) {
             PAINTSTRUCT ps;
             HDC hdc = BeginPaint(h, &ps);
-            // Fill only the border strips (not the WebView2 area)
             FillRect(hdc, &ps.rcPaint, g_bgBrush);
             EndPaint(h, &ps);
             return 0;
         }
         break;
 
+    // ── Mouse forwarding for composition mode ──
+    case WM_MOUSEMOVE:
+    case WM_LBUTTONDOWN: case WM_LBUTTONUP: case WM_LBUTTONDBLCLK:
+    case WM_RBUTTONDOWN: case WM_RBUTTONUP: case WM_RBUTTONDBLCLK:
+    case WM_MBUTTONDOWN: case WM_MBUTTONUP: case WM_MBUTTONDBLCLK:
+    case WM_XBUTTONDOWN: case WM_XBUTTONUP: case WM_XBUTTONDBLCLK:
+    case WM_MOUSEWHEEL:  case WM_MOUSEHWHEEL:
+    case WM_MOUSELEAVE:
+        if (g_compCtrl) {
+            if (m == WM_MOUSEMOVE && !g_mouseTracking) {
+                TRACKMOUSEEVENT tme = { sizeof(tme), TME_LEAVE, h, 0 };
+                TrackMouseEvent(&tme);
+                g_mouseTracking = true;
+            }
+            if (m == WM_MOUSELEAVE) g_mouseTracking = false;
+
+            POINT pt;
+            UINT32 mouseData = 0;
+            auto vk = static_cast<COREWEBVIEW2_MOUSE_EVENT_VIRTUAL_KEYS>(GET_KEYSTATE_WPARAM(w));
+
+            if (m == WM_MOUSEWHEEL || m == WM_MOUSEHWHEEL) {
+                pt = {GET_X_LPARAM(l), GET_Y_LPARAM(l)};
+                ScreenToClient(h, &pt);
+                mouseData = GET_WHEEL_DELTA_WPARAM(w);
+            } else if (m == WM_XBUTTONDOWN || m == WM_XBUTTONUP || m == WM_XBUTTONDBLCLK) {
+                pt = {GET_X_LPARAM(l), GET_Y_LPARAM(l)};
+                mouseData = GET_XBUTTON_WPARAM(w);
+            } else if (m == WM_MOUSELEAVE) {
+                pt = {0, 0};
+                vk = COREWEBVIEW2_MOUSE_EVENT_VIRTUAL_KEYS_NONE;
+            } else {
+                pt = {GET_X_LPARAM(l), GET_Y_LPARAM(l)};
+            }
+
+            // Capture mouse on button down, release on button up
+            if (m == WM_LBUTTONDOWN || m == WM_MBUTTONDOWN || m == WM_RBUTTONDOWN || m == WM_XBUTTONDOWN)
+                SetCapture(h);
+            if (m == WM_LBUTTONUP || m == WM_MBUTTONUP || m == WM_RBUTTONUP || m == WM_XBUTTONUP)
+                ReleaseCapture();
+
+            g_compCtrl->SendMouseInput(static_cast<COREWEBVIEW2_MOUSE_EVENT_KIND>(m), vk, mouseData, pt);
+            return 0;
+        }
+        break;
+
+    case WM_SETCURSOR:
+        if (g_compCtrl && LOWORD(l) == HTCLIENT) {
+            HCURSOR cursor;
+            if (SUCCEEDED(g_compCtrl->get_Cursor(&cursor)) && cursor) {
+                SetCursor(cursor);
+                return TRUE;
+            }
+        }
+        break;
+
     case WM_SIZE:
         if (g_ctrl) {
             RECT b; GetClientRect(h, &b);
-            if (g_frameless) {
-                b.left += g_borderSize; b.top += g_borderSize;
-                b.right -= g_borderSize; b.bottom -= g_borderSize;
-            }
             g_ctrl->put_Bounds(b);
         }
-        // Emit size events
         if (w == SIZE_MAXIMIZED)      ipc_emit("window.maximized");
         else if (w == SIZE_MINIMIZED) ipc_emit("window.minimized");
         else if (w == SIZE_RESTORED)  ipc_emit("window.restored");
         ipc_emit("window.resized", {{"w", (int)LOWORD(l)}, {"h", (int)HIWORD(l)}});
         return 0;
+
+    case WM_DPICHANGED:
+        if (g_ctrl) {
+            ComPtr<ICoreWebView2Controller3> ctrl3;
+            if (SUCCEEDED(g_ctrl.As(&ctrl3)))
+                ctrl3->put_RasterizationScale(HIWORD(w) / 96.0);
+            auto* r = reinterpret_cast<RECT*>(l);
+            SetWindowPos(h, nullptr, r->left, r->top, r->right - r->left, r->bottom - r->top, SWP_NOZORDER);
+        }
+        return 0;
+
     case WM_MOVE:
         ipc_emit("window.moved", {{"x", (int)(short)LOWORD(l)}, {"y", (int)(short)HIWORD(l)}});
         return 0;
     case WM_SETFOCUS:
+        if (g_ctrl) g_ctrl->MoveFocus(COREWEBVIEW2_MOVE_FOCUS_REASON_PROGRAMMATIC);
         ipc_emit("window.focus");
         return 0;
     case WM_KILLFOCUS:
@@ -1473,7 +1722,10 @@ static LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM w, LPARAM l) {
         }
         if (pt.x < B) return HTLEFT;
         if (pt.x > rc.right - B) return HTRIGHT;
-        // Title bar drag area (except right corner for window controls)
+        // Composition mode: all content returns HTCLIENT; drag is handled
+        // by web content via window.startDrag()
+        if (g_compCtrl) return HTCLIENT;
+        // Windowed mode fallback: native title bar drag
         if (g_titleBarH > 0 && pt.y < g_titleBarH && pt.x < rc.right - 140)
             return HTCAPTION;
         return HTCLIENT;
@@ -1508,6 +1760,9 @@ int WINAPI wWinMain(HINSTANCE hi, HINSTANCE, LPWSTR, int ns) {
 
     // Load config
     g_cfg = loadConfig(exe_dir());
+#ifdef SINGLE_EXE
+    loadPak();
+#endif
     auto winCfg    = g_cfg.value("window", json::object());
 
     // Single instance lock
@@ -1533,6 +1788,7 @@ int WINAPI wWinMain(HINSTANCE hi, HINSTANCE, LPWSTR, int ns) {
     g_frameless    = winCfg.value("frameless", false);
     g_titleBarH    = winCfg.value("titleBarHeight", g_frameless ? 40 : 0);
     g_borderSize   = winCfg.value("borderSize", 6);
+    g_effectType   = parseEffectType(winCfg.value("effect", std::string{"none"}));
     auto bgHex     = winCfg.value("backgroundColor", std::string{"#1a1a2e"});
     COLORREF bgClr = parseHexColor(bgHex);
 
@@ -1577,25 +1833,31 @@ int WINAPI wWinMain(HINSTANCE hi, HINSTANCE, LPWSTR, int ns) {
 
     // DWM attributes for frameless
     if (g_frameless) {
-        // Windows 11: remove DWM-drawn 1px border
-        // DWMWA_BORDER_COLOR = 34, DWMWA_COLOR_NONE = 0xFFFFFFFE
-        COLORREF clrNone = 0xFFFFFFFE;
-        DwmSetWindowAttribute(g_hwnd, 34, &clrNone, sizeof(clrNone));
+        // Auto-detect dark/light based on background luminance
+        int lum = (GetRValue(bgClr) * 299 + GetGValue(bgClr) * 587 + GetBValue(bgClr) * 114) / 1000;
+        BOOL darkMode = (lum < 128) ? TRUE : FALSE;
 
-        // Dark mode DWM rendering
         // DWMWA_USE_IMMERSIVE_DARK_MODE = 20
-        BOOL darkMode = TRUE;
         DwmSetWindowAttribute(g_hwnd, 20, &darkMode, sizeof(darkMode));
 
-        // Set DWM caption color to match background (Win11)
+        // Windows 11 (22000+): set border color to match background instead of
+        // DWMWA_COLOR_NONE, which can still flash on focus changes.
+        // DWMWA_BORDER_COLOR = 34
+        DwmSetWindowAttribute(g_hwnd, 34, &bgClr, sizeof(bgClr));
+
         // DWMWA_CAPTION_COLOR = 35
         DwmSetWindowAttribute(g_hwnd, 35, &bgClr, sizeof(bgClr));
 
-        // Extend frame into client area for shadow effect
-        MARGINS m = {0, 0, 0, 1};
-        DwmExtendFrameIntoClientArea(g_hwnd, &m);
+        // Extend frame: full glass for effects, 1px bottom for shadow only
+        if (g_effectType >= 2) {
+            MARGINS m = {-1, -1, -1, -1};
+            DwmExtendFrameIntoClientArea(g_hwnd, &m);
+            DwmSetWindowAttribute(g_hwnd, 38, &g_effectType, sizeof(g_effectType));
+        } else {
+            MARGINS m = {0, 0, 0, 1};
+            DwmExtendFrameIntoClientArea(g_hwnd, &m);
+        }
 
-        // Save background brush for WM_ERASEBKGND / WM_PAINT
         g_bgBrush = CreateSolidBrush(bgClr);
     }
 

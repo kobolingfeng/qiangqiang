@@ -1,4 +1,5 @@
 // scripts/dev.ts — Dev mode: build frontend + serve + launch native shell
+// Supports built-in Bun bundler or custom dev server (Vite, Webpack, etc.)
 import { existsSync, mkdirSync, watch } from 'fs';
 import { join, resolve } from 'path';
 
@@ -6,19 +7,77 @@ const ROOT = resolve(import.meta.dir, '..');
 const DIST = join(ROOT, 'dist');
 const SRC  = join(ROOT, 'src');
 
+// ── Load config ───────────────────────────────────────
+let PORT = 3000;
+let devCommand: string | undefined;
+let waitForPort = true;
+try {
+    const cfg = await Bun.file(join(ROOT, 'app.config.json')).json();
+    PORT       = cfg?.dev?.port ?? 3000;
+    devCommand = cfg?.dev?.command;
+    waitForPort = cfg?.dev?.waitForPort ?? true;
+} catch {}
+
 // ── Check native exe ──────────────────────────────────
 const exePath = join(DIST, 'app.exe');
 if (!existsSync(exePath)) {
-    console.log('Native shell not found. Running full build first...\n');
-    const r = Bun.spawnSync(['bun', 'run', 'build'], { cwd: ROOT, stdout: 'inherit', stderr: 'inherit' });
+    console.log('Native shell not found. Building native only...\n');
+    const r = Bun.spawnSync(['bun', 'run', 'build:native'], { cwd: ROOT, stdout: 'inherit', stderr: 'inherit' });
     if (r.exitCode !== 0) {
-        console.error('\n❌ Build failed. Fix errors and try again.');
-        process.exit(1);
+        // Fallback: full build
+        const r2 = Bun.spawnSync(['bun', 'run', 'build'], { cwd: ROOT, stdout: 'inherit', stderr: 'inherit' });
+        if (r2.exitCode !== 0) {
+            console.error('\n❌ Build failed. Fix errors and try again.');
+            process.exit(1);
+        }
     }
     console.log('');
 }
 
-// ── Build frontend ────────────────────────────────────
+// ── Custom dev command (Vite, Webpack, etc.) ──────────
+if (devCommand) {
+    console.log(`🔧 Using custom dev server: ${devCommand}`);
+
+    // Copy config to dist for native shell
+    mkdirSync(DIST, { recursive: true });
+    const cfgSrc = join(ROOT, 'app.config.json');
+    if (existsSync(cfgSrc))
+        await Bun.write(join(DIST, 'app.config.json'), Bun.file(cfgSrc));
+
+    const [cmd, ...args] = devCommand.split(' ');
+    const devProc = Bun.spawn([cmd, ...args], {
+        cwd: ROOT,
+        stdout: 'inherit',
+        stderr: 'inherit',
+        env: { ...process.env, PORT: String(PORT) },
+    });
+
+    if (waitForPort) {
+        console.log(`⏳ Waiting for dev server on port ${PORT}...`);
+        const start = Date.now();
+        const timeout = 30000;
+        while (Date.now() - start < timeout) {
+            try {
+                await fetch(`http://localhost:${PORT}`);
+                break;
+            } catch {
+                await Bun.sleep(300);
+            }
+        }
+    }
+
+    console.log(`🚀 Launching app → http://localhost:${PORT}`);
+    const appProc = Bun.spawn([exePath, '--dev', `http://localhost:${PORT}`], {
+        stdout: 'inherit',
+        stderr: 'inherit',
+    });
+
+    const code = await appProc.exited;
+    devProc.kill();
+    process.exit(code);
+}
+
+// ── Built-in Bun bundler (default) ────────────────────
 let buildCount = 0;
 
 async function buildFrontend() {
@@ -33,7 +92,6 @@ async function buildFrontend() {
         return false;
     }
 
-    // Copy HTML with .ts → .js and inject live-reload script
     let html = await Bun.file(join(SRC, 'index.html')).text();
     html = html.replace('./main.ts', './main.js');
     html = html.replace('</body>', `<script>
@@ -48,7 +106,6 @@ setInterval(async () => {
 </script>\n</body>`);
     await Bun.write(join(DIST, 'index.html'), html);
 
-    // Copy config to dist for native shell
     const cfgSrc = join(ROOT, 'app.config.json');
     if (existsSync(cfgSrc))
         await Bun.write(join(DIST, 'app.config.json'), Bun.file(cfgSrc));
@@ -72,19 +129,11 @@ watch(SRC, { recursive: true }, async (_event, filename) => {
     rebuilding = false;
 });
 
-// ── Read dev port from config ─────────────────────────
-let PORT = 3000;
-try {
-    const cfg = await Bun.file(join(ROOT, 'app.config.json')).json();
-    PORT = cfg?.dev?.port ?? 3000;
-} catch {}
-
 const server = Bun.serve({
     port: PORT,
     async fetch(req) {
         const url = new URL(req.url);
 
-        // Live-reload endpoint
         if (url.pathname === '/__reload') {
             return new Response(String(buildCount));
         }

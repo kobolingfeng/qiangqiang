@@ -17,12 +17,12 @@
 
 - **极小体积** — 单 exe 687KB（含嵌入 HTML/JS/Config），无需任何外部文件
 - **极快编译** — 单文件 C++，增量编译 < 2s
-- **完整 API** — 80 个原生命令 + 14 个事件 + 完整 TypeScript 类型
-- **无边框窗口** — DWM 阴影 + 自定义标题栏 + 原生缩放
-- **热重载开发** — `bun run dev` 一键启动，前端修改实时刷新
+- **完整 API** — 82 个原生命令 + 14 个事件 + 完整 TypeScript 类型
+- **真无边框窗口** — Composition 模式 WebView2（和 Wails/Tauri 同级），零像素边框 + DWM 阴影
+- **热重载开发** — `bun run dev` 一键启动，支持 Vite HMR / 内置 Bun 热重载
 - **零依赖** — 不需要 Node.js、Electron、Tauri 等
-- **单 exe 分发** — `bun run build:single` 一个 exe 包含所有资源
-- **前端自由** — 支持任何框架：React / Vue / Svelte / Solid / 原生 TS，只要输出 HTML/CSS/JS
+- **单 exe 分发** — `bun run build:single`，pak 打包 + 内存资源拦截，支持 Vite 多文件产物
+- **前端自由** — 支持 Vite / React / Vue / Svelte / Solid / 原生 TS，配置化接入
 - **仅 Windows** — 专注 Windows 平台，API 直达系统底层
 
 ## 快速开始
@@ -48,8 +48,10 @@ bun run dev      # 热重载开发模式（F12 打开 DevTools）
 ### 构建
 
 ```bash
-bun run build          # 编译到 dist/（exe + HTML + config）
-bun run build:single   # 编译单 exe（HTML/JS 嵌入资源段）
+bun run build            # 编译前端 + 原生壳
+bun run build:native     # 仅编译原生壳（改了 main.cpp 时用）
+bun run build:frontend   # 仅编译前端
+bun run build:single     # 编译单 exe（HTML/JS 嵌入资源段）
 ```
 
 ### 打包
@@ -57,6 +59,35 @@ bun run build:single   # 编译单 exe（HTML/JS 嵌入资源段）
 ```bash
 bun run package  # 生成 release/强强-portable.zip
 ```
+
+## 使用 Vite / Vue / React
+
+强强默认使用 Bun 打包前端。如果你想用 Vite + Vue/React，只需在 `app.config.json` 中配置：
+
+```json
+{
+    "dev": {
+        "command": "npx vite",
+        "port": 5173,
+        "waitForPort": true
+    },
+    "build": {
+        "command": "npx vite build"
+    }
+}
+```
+
+3 步接入 Vite + Vue：
+
+```bash
+# 1. 初始化 Vue 项目
+bun create vite src --template vue-ts
+# 2. 在 app.config.json 加上 dev.command 和 build.command
+# 3. 开发
+bun run dev
+```
+
+`dev.command` 和 `build.command` 支持任何命令（Vite、Webpack、Parcel 等）。不配置则走内置 Bun 打包。
 
 ## API 总览
 
@@ -71,6 +102,8 @@ await win.center();
 await win.maximize();
 await win.setAlwaysOnTop(true);
 await win.startDrag();  // 自定义标题栏拖拽
+await win.setBackgroundColor('#1a1a2e');  // 动态切换主题时同步 DWM 边框色
+await win.setEffect('mica');  // Windows 11 Mica / Acrylic 特效
 
 // 事件监听
 win.onResized(({ w, h }) => console.log(`${w}×${h}`));
@@ -266,16 +299,31 @@ await devtools.open();
         "splash": true
     },
     "dev": {
-        "port": 3000
+        "port": 3000,
+        "command": "npx vite",
+        "waitForPort": true
+    },
+    "build": {
+        "command": "npx vite build",
+        "outDir": "dist"
     }
 }
 ```
+
+| 字段 | 说明 |
+|---|---|
+| `frameless` | 启用无边框 Composition 模式（WebView2 填满窗口，零边框） |
+| `borderSize` | 窗口边缘 resize 手柄的 hit-test 宽度（像素） |
+| `backgroundColor` | 窗口背景色，自动同步 DWM 暗色/亮色模式 |
+| `dev.command` | 自定义开发服务器命令（Vite、Webpack 等），不设则用内置 Bun |
+| `build.command` | 自定义构建命令，不设则用内置 Bun |
+| `window.effect` | 窗口特效：`"none"` `"mica"` `"acrylic"` `"micaAlt"`（Win11） |
 
 ## 项目结构
 
 ```
 ├── native/
-│   ├── main.cpp        # C++ 壳 (~1000 行)
+│   ├── main.cpp        # C++ 壳（WebView2 Composition 模式）
 │   ├── app.rc          # 资源文件
 │   └── app.ico         # 应用图标（替换此文件自定义图标）
 ├── src/
@@ -306,7 +354,7 @@ await devtools.open();
 
 | 分类 | 命令 | 说明 |
 |---|---|---|
-| **窗口** | `window.setTitle` `window.minimize` `window.maximize` `window.restore` `window.close` `window.show` `window.hide` `window.size` `window.setSize` `window.position` `window.setPosition` `window.center` `window.setAlwaysOnTop` `window.isMaximized` `window.startDrag` `window.isFrameless` | 窗口管理 |
+| **窗口** | `window.setTitle` `window.minimize` `window.maximize` `window.restore` `window.close` `window.show` `window.hide` `window.size` `window.setSize` `window.position` `window.setPosition` `window.center` `window.setAlwaysOnTop` `window.isMaximized` `window.setBackgroundColor` `window.startDrag` `window.isFrameless` | 窗口管理 |
 | **窗口配置** | `window.getConfig` `window.saveState` `window.loadState` | 配置 + 持久化 |
 | **对话框** | `dialog.openFile` `dialog.saveFile` `dialog.openFolder` `dialog.message` `dialog.confirm` | 系统对话框 |
 | **文件系统** | `fs.readTextFile` `fs.writeTextFile` `fs.exists` `fs.readDir` `fs.mkdir` `fs.remove` `fs.rename` `fs.stat` | 文件操作 |
@@ -345,6 +393,42 @@ await devtools.open();
 | `tray.click` | — | 托盘单击 |
 | `tray.doubleClick` | — | 托盘双击 |
 | `tray.rightClick` | — | 托盘右击 |
+
+## CSS 拖拽区域
+
+支持 CSS `app-region` 属性，无需手动调用 `window.startDrag()`：
+
+```css
+.titlebar {
+    app-region: drag;        /* 可拖拽区域 */
+}
+.titlebar button {
+    app-region: no-drag;     /* 按钮等交互元素排除 */
+}
+```
+
+## 窗口特效
+
+Windows 11 支持 Mica / Acrylic 材质特效：
+
+```json
+{
+    "window": {
+        "effect": "mica"
+    }
+}
+```
+
+或运行时切换：
+
+```typescript
+await win.setEffect('mica');     // Mica 材质
+await win.setEffect('acrylic');  // Acrylic 亚克力
+await win.setEffect('micaAlt');  // MicaAlt (标签页风格)
+await win.setEffect('none');     // 关闭特效
+```
+
+> 使用特效时，WebView2 背景自动设为透明。前端 CSS 需要用 `background: transparent` 或半透明色才能看到效果。
 
 ## 自定义图标
 

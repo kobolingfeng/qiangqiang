@@ -49,8 +49,10 @@ export const win = {
     setPosition:    (x: number, y: number) => invoke<boolean>('window.setPosition', { x, y }),
     center:         () => invoke<boolean>('window.center'),
     setAlwaysOnTop: (top: boolean) => invoke<boolean>('window.setAlwaysOnTop', { top }),
-    isMaximized:    () => invoke<boolean>('window.isMaximized'),
-    startDrag:      () => invoke<boolean>('window.startDrag'),
+    isMaximized:        () => invoke<boolean>('window.isMaximized'),
+    setBackgroundColor: (color: string) => invoke<boolean>('window.setBackgroundColor', { color }),
+    setEffect:          (effect: 'none' | 'mica' | 'acrylic' | 'micaAlt') => invoke<boolean>('window.setEffect', { effect }),
+    startDrag:          () => invoke<boolean>('window.startDrag'),
     getConfig:      () => invoke<any>('window.getConfig'),
     isFrameless:    () => invoke<boolean>('window.isFrameless'),
     // Events
