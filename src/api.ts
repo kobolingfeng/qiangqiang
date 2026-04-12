@@ -52,6 +52,8 @@ export const win = {
     isMaximized:        () => invoke<boolean>('window.isMaximized'),
     setBackgroundColor: (color: string) => invoke<boolean>('window.setBackgroundColor', { color }),
     setEffect:          (effect: 'none' | 'mica' | 'acrylic' | 'micaAlt') => invoke<boolean>('window.setEffect', { effect }),
+    setOpacity:         (opacity: number) => invoke<boolean>('window.setOpacity', { opacity }),
+    setProgress:        (value: number) => invoke<boolean>('window.setProgress', { value }),
     startDrag:          () => invoke<boolean>('window.startDrag'),
     getConfig:      () => invoke<any>('window.getConfig'),
     isFrameless:    () => invoke<boolean>('window.isFrameless'),
@@ -109,9 +111,16 @@ export const clipboard = {
 
 // ── Shell ─────────────────────────────────────
 
+export interface RunResult {
+    exitCode: number;
+    stdout: string;
+    stderr: string;
+}
+
 export const shell = {
     open:    (url: string) => invoke<boolean>('shell.open', { url }),
     execute: (program: string, args?: string[]) => invoke<boolean>('shell.execute', { program, args: args ?? [] }),
+    run:     (program: string, args?: string[]) => invoke<RunResult>('shell.run', { program, args: args ?? [] }),
 };
 
 // ── App ───────────────────────────────────────
@@ -201,7 +210,8 @@ export const http = {
 // ── OS Info ───────────────────────────────────
 
 export const os = {
-    platform: () => invoke<string>('os.platform'),
+    platform:   () => invoke<string>('os.platform'),
+    isDarkMode: () => invoke<boolean>('os.isDarkMode'),
     arch:     () => invoke<string>('os.arch'),
     version:  () => invoke<string>('os.version'),
     hostname: () => invoke<string>('os.hostname'),

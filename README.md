@@ -17,7 +17,7 @@
 
 - **极小体积** — 单 exe 687KB（含嵌入 HTML/JS/Config），无需任何外部文件
 - **极快编译** — 单文件 C++，增量编译 < 2s
-- **完整 API** — 82 个原生命令 + 14 个事件 + 完整 TypeScript 类型
+- **完整 API** — 88 个原生命令 + 15 个事件 + 完整 TypeScript 类型
 - **真无边框窗口** — Composition 模式 WebView2（和 Wails/Tauri 同级），零像素边框 + DWM 阴影
 - **热重载开发** — `bun run dev` 一键启动，支持 Vite HMR / 内置 Bun 热重载
 - **零依赖** — 不需要 Node.js、Electron、Tauri 等
@@ -350,24 +350,25 @@ await devtools.open();
 事件: { event: string, data: any }
 ```
 
-## 全部命令列表 (80 个)
+## 全部命令列表 (88 个)
 
 | 分类 | 命令 | 说明 |
 |---|---|---|
-| **窗口** | `window.setTitle` `window.minimize` `window.maximize` `window.restore` `window.close` `window.show` `window.hide` `window.size` `window.setSize` `window.position` `window.setPosition` `window.center` `window.setAlwaysOnTop` `window.isMaximized` `window.setBackgroundColor` `window.startDrag` `window.isFrameless` | 窗口管理 |
+| **窗口** | `window.setTitle` `window.minimize` `window.maximize` `window.restore` `window.close` `window.show` `window.hide` `window.size` `window.setSize` `window.position` `window.setPosition` `window.center` `window.setAlwaysOnTop` `window.isMaximized` `window.setBackgroundColor` `window.setEffect` `window.setOpacity` `window.setProgress` `window.startDrag` `window.isFrameless` | 窗口管理 |
+| **多窗口** | `window.createChild` `window.closeChild` `window.listChildren` | 子窗口 |
 | **窗口配置** | `window.getConfig` `window.saveState` `window.loadState` | 配置 + 持久化 |
 | **对话框** | `dialog.openFile` `dialog.saveFile` `dialog.openFolder` `dialog.message` `dialog.confirm` | 系统对话框 |
 | **文件系统** | `fs.readTextFile` `fs.writeTextFile` `fs.exists` `fs.readDir` `fs.mkdir` `fs.remove` `fs.rename` `fs.stat` | 文件操作 |
 | **剪贴板** | `clipboard.readText` `clipboard.writeText` | 剪贴板 |
-| **Shell** | `shell.open` `shell.execute` | Shell 操作 |
-| **应用** | `app.exit` `app.dataDir` | 应用控制 |
+| **Shell** | `shell.open` `shell.execute` `shell.run` | Shell 操作 |
+| **应用** | `app.exit` `app.dataDir` `app.checkUpdate` `app.downloadUpdate` `app.installUpdate` | 应用控制 |
 | **托盘** | `tray.create` `tray.setTooltip` `tray.remove` | 系统托盘 |
 | **环境变量** | `env.get` `env.getAll` | 环境变量 |
 | **快捷键** | `hotkey.register` `hotkey.unregister` `hotkey.unregisterAll` | 全局热键 |
 | **通知** | `notification.show` | 系统通知 |
 | **菜单** | `menu.popup` | 右键菜单 |
 | **HTTP** | `http.request` | 原生 HTTP (绕过 CORS) |
-| **OS** | `os.platform` `os.arch` `os.version` `os.hostname` `os.username` `os.locale` | 系统信息 |
+| **OS** | `os.platform` `os.arch` `os.version` `os.hostname` `os.username` `os.locale` `os.isDarkMode` | 系统信息 |
 | **路径** | `path.home` `path.documents` `path.desktop` `path.downloads` `path.appData` `path.localAppData` `path.temp` | 特殊目录 |
 | **文件监听** | `watcher.start` `watcher.stop` | 文件系统监听 |
 | **DevTools** | `devtools.open` `devtools.close` | 开发者工具 |
@@ -390,9 +391,73 @@ await devtools.open();
 | `window.fileDrop` | `{ files, x, y }` | 文件拖放到窗口 |
 | `hotkey.triggered` | `{ id }` | 全局快捷键触发 |
 | `watcher.changed` | `{ id, action, path }` | 文件变更 |
+| `window.childClosed` | `{ id }` | 子窗口关闭 |
 | `tray.click` | — | 托盘单击 |
 | `tray.doubleClick` | — | 托盘双击 |
 | `tray.rightClick` | — | 托盘右击 |
+
+## 安全权限
+
+通过 `permissions` 配置限制前端可调用的 API：
+
+```json
+{
+    "permissions": {
+        "registry.*": false,
+        "shell.execute": false,
+        "fs.*": true
+    }
+}
+```
+
+支持命名空间通配符（`fs.*` 匹配所有 `fs.xxx` 命令）。未列出的命令默认允许。
+
+## 自动更新
+
+```typescript
+import { app } from './api';
+
+const info = await app.checkUpdate('https://example.com/version.json');
+if (info.version > currentVersion) {
+    await app.downloadUpdate(info.downloadUrl);
+    await app.installUpdate(); // 热替换 exe 并重启
+}
+```
+
+## 多窗口
+
+```typescript
+import { win } from './api';
+
+const id = await win.createChild({
+    title: '设置',
+    width: 500,
+    height: 400,
+    url: 'https://app.local/settings.html'
+});
+win.onChildClosed(({ id }) => console.log('关闭:', id));
+await win.closeChild(id);
+```
+
+## 系统主题 & 窗口控制
+
+```typescript
+import { os, win } from './api';
+
+// 检测系统暗色模式
+const dark = await os.isDarkMode();
+
+// 窗口透明度 (0.0 ~ 1.0)
+await win.setOpacity(0.9);
+
+// 任务栏进度条 (-1 隐藏, 0~1 进度)
+await win.setProgress(0.5);
+await win.setProgress(-1); // 隐藏
+
+// 执行命令并获取输出
+import { shell } from './api';
+const { exitCode, stdout, stderr } = await shell.run('git', ['status']);
+```
 
 ## CSS 拖拽区域
 

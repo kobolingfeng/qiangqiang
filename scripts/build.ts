@@ -1,7 +1,7 @@
 // scripts/build.ts — Build frontend + compile native shell (MSVC)
 // Supports built-in Bun bundler or custom build commands (Vite, Webpack, etc.)
 // Single-exe mode: embeds HTML+config as Win32 RCDATA resources
-import { existsSync, mkdirSync, unlinkSync, writeFileSync, readdirSync } from 'fs';
+import { existsSync, mkdirSync, unlinkSync, writeFileSync, readdirSync, readFileSync } from 'fs';
 import { join, resolve } from 'path';
 import { execSync } from 'child_process';
 
@@ -137,24 +137,11 @@ if (singleExe) {
             if (entry.isDirectory()) {
                 collectFiles(full, rel);
             } else if (entry.name !== 'app.exe' && entry.name !== 'app.config.json') {
-                distFiles.push({ path: rel, data: Buffer.from(Bun.file(full).arrayBuffer() as unknown as ArrayBuffer) });
+                distFiles.push({ path: rel, data: readFileSync(full) });
             }
         }
     };
-    // Read files synchronously for pak
-    const { readdirSync: rdSync, readFileSync: rfSync } = await import('fs');
-    const collectSync = (dir: string, prefix: string) => {
-        for (const entry of rdSync(dir, { withFileTypes: true })) {
-            const full = join(dir, entry.name);
-            const rel = prefix ? prefix + '/' + entry.name : entry.name;
-            if (entry.isDirectory()) {
-                collectSync(full, rel);
-            } else if (entry.name !== 'app.exe' && entry.name !== 'app.config.json') {
-                distFiles.push({ path: rel, data: rfSync(full) });
-            }
-        }
-    };
-    collectSync(DIST, '');
+    collectFiles(DIST, '');
 
     // Build pak binary
     let totalSize = 4; // magic(2) + count(2)

@@ -1502,6 +1502,115 @@ static void reg_multiwindow() {
 }
 
 // ================================================================
+//  Commands: System theme + Taskbar + Shell.run + Opacity
+// ================================================================
+
+static void reg_extras() {
+    // System theme detection
+    ipc_on("os.isDarkMode", [](const json&) -> json {
+        HKEY hKey;
+        if (RegOpenKeyExW(HKEY_CURRENT_USER,
+            L"Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize",
+            0, KEY_READ, &hKey) != ERROR_SUCCESS) return false;
+        DWORD val = 1, sz = sizeof(val);
+        RegQueryValueExW(hKey, L"AppsUseLightTheme", nullptr, nullptr, (BYTE*)&val, &sz);
+        RegCloseKey(hKey);
+        return val == 0; // 0 = dark mode
+    });
+
+    // Window opacity
+    ipc_on("window.setOpacity", [](const json& a) -> json {
+        double opacity = a.value("opacity", 1.0);
+        BYTE alpha = (BYTE)(opacity * 255);
+        auto style = GetWindowLongW(g_hwnd, GWL_EXSTYLE);
+        if (alpha < 255) {
+            SetWindowLongW(g_hwnd, GWL_EXSTYLE, style | WS_EX_LAYERED);
+            SetLayeredWindowAttributes(g_hwnd, 0, alpha, LWA_ALPHA);
+        } else {
+            SetWindowLongW(g_hwnd, GWL_EXSTYLE, style & ~WS_EX_LAYERED);
+        }
+        return true;
+    });
+
+    // Taskbar progress
+    ipc_on("window.setProgress", [](const json& a) -> json {
+        double value = a.value("value", -1.0); // -1 = hide, 0..1 = progress
+        ComPtr<ITaskbarList3> taskbar;
+        if (FAILED(CoCreateInstance(CLSID_TaskbarList, nullptr, CLSCTX_ALL,
+            IID_PPV_ARGS(&taskbar)))) return false;
+        taskbar->HrInit();
+        if (value < 0) {
+            taskbar->SetProgressState(g_hwnd, TBPF_NOPROGRESS);
+        } else {
+            taskbar->SetProgressState(g_hwnd, TBPF_NORMAL);
+            taskbar->SetProgressValue(g_hwnd, (ULONGLONG)(value * 1000), 1000);
+        }
+        return true;
+    });
+
+    // Shell.run with stdout/stderr capture
+    ipc_on("shell.run", [](const json& a) -> json {
+        auto program = a.value("program", std::string{});
+        if (program.empty()) throw std::runtime_error("program is required");
+        std::wstring cmdLine = U2W(program);
+        if (a.contains("args") && a["args"].is_array()) {
+            for (auto& arg : a["args"]) {
+                auto s = U2W(arg.get<std::string>());
+                cmdLine += L" ";
+                if (s.find(L' ') != std::wstring::npos)
+                    cmdLine += L'"' + s + L'"';
+                else
+                    cmdLine += s;
+            }
+        }
+
+        SECURITY_ATTRIBUTES sa{sizeof(sa), nullptr, TRUE};
+        HANDLE hOutR, hOutW, hErrR, hErrW;
+        CreatePipe(&hOutR, &hOutW, &sa, 0);
+        CreatePipe(&hErrR, &hErrW, &sa, 0);
+        SetHandleInformation(hOutR, HANDLE_FLAG_INHERIT, 0);
+        SetHandleInformation(hErrR, HANDLE_FLAG_INHERIT, 0);
+
+        STARTUPINFOW si{sizeof(si)};
+        si.dwFlags = STARTF_USESTDHANDLES;
+        si.hStdOutput = hOutW;
+        si.hStdError = hErrW;
+        PROCESS_INFORMATION pi{};
+
+        std::vector<wchar_t> cmd(cmdLine.begin(), cmdLine.end());
+        cmd.push_back(0);
+        if (!CreateProcessW(nullptr, cmd.data(), nullptr, nullptr, TRUE,
+            CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi)) {
+            CloseHandle(hOutR); CloseHandle(hOutW);
+            CloseHandle(hErrR); CloseHandle(hErrW);
+            throw std::runtime_error("Failed to start process");
+        }
+        CloseHandle(hOutW);
+        CloseHandle(hErrW);
+
+        auto readPipe = [](HANDLE h) -> std::string {
+            std::string result;
+            char buf[4096];
+            DWORD rd;
+            while (ReadFile(h, buf, sizeof(buf), &rd, nullptr) && rd > 0)
+                result.append(buf, rd);
+            CloseHandle(h);
+            return result;
+        };
+
+        auto stdout_ = readPipe(hOutR);
+        auto stderr_ = readPipe(hErrR);
+        WaitForSingleObject(pi.hProcess, INFINITE);
+        DWORD exitCode;
+        GetExitCodeProcess(pi.hProcess, &exitCode);
+        CloseHandle(pi.hProcess);
+        CloseHandle(pi.hThread);
+
+        return json{{"exitCode", (int)exitCode}, {"stdout", stdout_}, {"stderr", stderr_}};
+    });
+}
+
+// ================================================================
 //  Splash screen
 // ================================================================
 
@@ -2133,6 +2242,7 @@ int WINAPI wWinMain(HINSTANCE hi, HINSTANCE, LPWSTR, int ns) {
     reg_log();
     reg_updater();
     reg_multiwindow();
+    reg_extras();
 
     // Show splash while WebView2 loads
     showSplash(hi, width, height);
