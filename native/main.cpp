@@ -98,6 +98,7 @@ static bool g_frameless    = false;
 static int  g_titleBarH    = 0;
 static int  g_borderSize   = 6;
 static int  g_effectType   = 0; // 0=none, 2=mica, 3=acrylic, 4=micaAlt
+static std::unordered_map<std::string, bool> g_permissions; // cmd -> allowed
 
 // Tray
 #define WM_TRAYICON (WM_USER + 1)
@@ -116,6 +117,16 @@ static std::unordered_map<int, FileWatcher*> g_watchers;
 static int g_nextWatchId = 1;
 
 #define WM_FILE_CHANGED (WM_USER + 2)
+
+// Child windows
+struct ChildWindow {
+    int id;
+    HWND hwnd;
+    ComPtr<ICoreWebView2Controller> ctrl;
+    ComPtr<ICoreWebView2> view;
+};
+static std::unordered_map<int, ChildWindow*> g_children;
+static int g_nextChildId = 1;
 
 // Splash window
 static HWND g_splash = nullptr;
@@ -272,6 +283,24 @@ static void ipc_dispatch(LPCWSTR raw) {
         resp["id"] = req.value("id", -1);
         auto cmd  = req.value("cmd", std::string{});
         auto args = req.value("args", json::object());
+
+        // Permission check
+        if (!g_permissions.empty()) {
+            auto it = g_permissions.find(cmd);
+            if (it == g_permissions.end()) {
+                // Check wildcard: "fs.*" matches "fs.readTextFile"
+                auto dot = cmd.find('.');
+                if (dot != std::string::npos) {
+                    auto ns = cmd.substr(0, dot) + ".*";
+                    it = g_permissions.find(ns);
+                }
+            }
+            if (it != g_permissions.end() && !it->second) {
+                resp["error"] = "permission denied: " + cmd;
+                g_view->PostWebMessageAsJson(U2W(resp.dump()).c_str());
+                return;
+            }
+        }
 
         if (auto it = g_cmds.find(cmd); it != g_cmds.end()) {
             try { resp["result"] = it->second(args); }
@@ -1264,6 +1293,215 @@ static void reg_log() {
 }
 
 // ================================================================
+//  Commands: Auto-update
+// ================================================================
+
+static json httpGet(const std::string& url) {
+    auto wUrl = U2W(url);
+    URL_COMPONENTS uc{sizeof(uc)};
+    wchar_t host[256]{}, path[2048]{};
+    uc.lpszHostName = host; uc.dwHostNameLength = 256;
+    uc.lpszUrlPath = path; uc.dwUrlPathLength = 2048;
+    if (!WinHttpCrackUrl(wUrl.c_str(), 0, 0, &uc))
+        throw std::runtime_error("Invalid URL");
+    bool https = (uc.nScheme == INTERNET_SCHEME_HTTPS);
+    HINTERNET hSession = WinHttpOpen(L"QQ/1.0", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
+        WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
+    if (!hSession) throw std::runtime_error("WinHttpOpen failed");
+    HINTERNET hConnect = WinHttpConnect(hSession, host, uc.nPort, 0);
+    HINTERNET hRequest = WinHttpOpenRequest(hConnect, L"GET", path, nullptr,
+        WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, https ? WINHTTP_FLAG_SECURE : 0);
+    if (!WinHttpSendRequest(hRequest, WINHTTP_NO_ADDITIONAL_HEADERS, 0,
+        WINHTTP_NO_REQUEST_DATA, 0, 0, 0) || !WinHttpReceiveResponse(hRequest, nullptr)) {
+        WinHttpCloseHandle(hRequest); WinHttpCloseHandle(hConnect); WinHttpCloseHandle(hSession);
+        throw std::runtime_error("Request failed");
+    }
+    std::string body;
+    DWORD avail, rd;
+    while (WinHttpQueryDataAvailable(hRequest, &avail) && avail > 0) {
+        std::string chunk(avail, 0);
+        WinHttpReadData(hRequest, chunk.data(), avail, &rd);
+        chunk.resize(rd); body += chunk;
+    }
+    WinHttpCloseHandle(hRequest); WinHttpCloseHandle(hConnect); WinHttpCloseHandle(hSession);
+    return json::parse(body);
+}
+
+static bool downloadFile(const std::string& url, const std::wstring& dest) {
+    auto wUrl = U2W(url);
+    URL_COMPONENTS uc{sizeof(uc)};
+    wchar_t host[256]{}, path[2048]{};
+    uc.lpszHostName = host; uc.dwHostNameLength = 256;
+    uc.lpszUrlPath = path; uc.dwUrlPathLength = 2048;
+    if (!WinHttpCrackUrl(wUrl.c_str(), 0, 0, &uc)) return false;
+    bool https = (uc.nScheme == INTERNET_SCHEME_HTTPS);
+    HINTERNET hS = WinHttpOpen(L"QQ/1.0", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
+        WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
+    HINTERNET hC = WinHttpConnect(hS, host, uc.nPort, 0);
+    HINTERNET hR = WinHttpOpenRequest(hC, L"GET", path, nullptr,
+        WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, https ? WINHTTP_FLAG_SECURE : 0);
+    if (!WinHttpSendRequest(hR, WINHTTP_NO_ADDITIONAL_HEADERS, 0,
+        WINHTTP_NO_REQUEST_DATA, 0, 0, 0) || !WinHttpReceiveResponse(hR, nullptr)) {
+        WinHttpCloseHandle(hR); WinHttpCloseHandle(hC); WinHttpCloseHandle(hS);
+        return false;
+    }
+    std::ofstream out(dest, std::ios::binary);
+    DWORD avail, rd;
+    while (WinHttpQueryDataAvailable(hR, &avail) && avail > 0) {
+        std::string chunk(avail, 0);
+        WinHttpReadData(hR, chunk.data(), avail, &rd);
+        out.write(chunk.data(), rd);
+    }
+    WinHttpCloseHandle(hR); WinHttpCloseHandle(hC); WinHttpCloseHandle(hS);
+    return true;
+}
+
+static void reg_updater() {
+    ipc_on("app.checkUpdate", [](const json& a) -> json {
+        auto url = a.value("url", std::string{});
+        if (url.empty()) throw std::runtime_error("url is required");
+        return httpGet(url);
+    });
+    ipc_on("app.downloadUpdate", [](const json& a) -> json {
+        auto url = a.value("url", std::string{});
+        if (url.empty()) throw std::runtime_error("url is required");
+        auto dest = exe_dir() + L"\\data\\update.exe";
+        fspath::create_directories(exe_dir() + L"\\data");
+        if (!downloadFile(url, dest)) throw std::runtime_error("Download failed");
+        return W2U(dest);
+    });
+    ipc_on("app.installUpdate", [](const json&) -> json {
+        auto updateExe = exe_dir() + L"\\data\\update.exe";
+        if (!fspath::exists(updateExe))
+            throw std::runtime_error("No update downloaded");
+        wchar_t exePath[MAX_PATH];
+        GetModuleFileNameW(nullptr, exePath, MAX_PATH);
+        auto oldExe = std::wstring(exePath) + L".old";
+        // Create a batch script to replace and restart
+        auto bat = exe_dir() + L"\\data\\update.bat";
+        std::ofstream f(bat);
+        f << "@echo off\n";
+        f << "timeout /t 1 /nobreak >nul\n";
+        f << "del \"" << W2U(oldExe) << "\" 2>nul\n";
+        f << "move \"" << W2U(exePath) << "\" \"" << W2U(oldExe) << "\"\n";
+        f << "move \"" << W2U(updateExe) << "\" \"" << W2U(exePath) << "\"\n";
+        f << "start \"\" \"" << W2U(exePath) << "\"\n";
+        f << "del \"%~f0\"\n";
+        f.close();
+        ShellExecuteW(nullptr, L"open", bat.c_str(), nullptr, nullptr, SW_HIDE);
+        PostQuitMessage(0);
+        return true;
+    });
+}
+
+// ================================================================
+//  Commands: Multi-window
+// ================================================================
+
+static LRESULT CALLBACK ChildWndProc(HWND h, UINT m, WPARAM w, LPARAM l) {
+    if (m == WM_SIZE) {
+        for (auto& [id, cw] : g_children) {
+            if (cw->hwnd == h && cw->ctrl) {
+                RECT b; GetClientRect(h, &b);
+                cw->ctrl->put_Bounds(b);
+                break;
+            }
+        }
+        return 0;
+    }
+    if (m == WM_CLOSE) {
+        for (auto& [id, cw] : g_children) {
+            if (cw->hwnd == h) {
+                ipc_emit("window.childClosed", {{"id", id}});
+                break;
+            }
+        }
+        DestroyWindow(h);
+        return 0;
+    }
+    if (m == WM_DESTROY) {
+        for (auto it = g_children.begin(); it != g_children.end(); ++it) {
+            if (it->second->hwnd == h) {
+                delete it->second;
+                g_children.erase(it);
+                break;
+            }
+        }
+        return 0;
+    }
+    return DefWindowProcW(h, m, w, l);
+}
+
+static void reg_multiwindow() {
+    static bool classRegistered = false;
+
+    ipc_on("window.createChild", [](const json& a) -> json {
+        auto title = U2W(a.value("title", std::string{""}));
+        int w = a.value("width", 600), h = a.value("height", 400);
+        auto url = a.value("url", std::string{});
+
+        if (!classRegistered) {
+            WNDCLASSEXW wc{sizeof(wc)};
+            wc.lpfnWndProc = ChildWndProc;
+            wc.hInstance = GetModuleHandleW(nullptr);
+            wc.lpszClassName = L"QQ_Child";
+            wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
+            wc.hbrBackground = g_bgBrush ? g_bgBrush : (HBRUSH)(COLOR_WINDOW + 1);
+            RegisterClassExW(&wc);
+            classRegistered = true;
+        }
+
+        int id = g_nextChildId++;
+        HWND child = CreateWindowExW(0, L"QQ_Child", title.c_str(),
+            WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
+            CW_USEDEFAULT, CW_USEDEFAULT, w, h,
+            g_hwnd, nullptr, GetModuleHandleW(nullptr), nullptr);
+        ShowWindow(child, SW_SHOW);
+
+        auto* cw = new ChildWindow{id, child, nullptr, nullptr};
+        g_children[id] = cw;
+
+        // Create WebView2 in child window (windowed mode for simplicity)
+        g_env->CreateCoreWebView2Controller(child,
+            Callback<ICoreWebView2CreateCoreWebView2ControllerCompletedHandler>(
+            [id, url](HRESULT hr, ICoreWebView2Controller* ctrl) -> HRESULT {
+                auto it = g_children.find(id);
+                if (FAILED(hr) || it == g_children.end()) return hr;
+                auto* cw = it->second;
+                cw->ctrl = ctrl;
+                ctrl->get_CoreWebView2(&cw->view);
+                RECT b; GetClientRect(cw->hwnd, &b);
+                ctrl->put_Bounds(b);
+
+                // Navigate
+                if (!url.empty()) {
+                    cw->view->Navigate(U2W(url).c_str());
+                } else {
+                    cw->view->Navigate(L"https://app.local/index.html");
+                }
+                return S_OK;
+            }).Get());
+
+        return id;
+    });
+
+    ipc_on("window.closeChild", [](const json& a) -> json {
+        int id = a.value("id", 0);
+        auto it = g_children.find(id);
+        if (it == g_children.end()) return false;
+        PostMessageW(it->second->hwnd, WM_CLOSE, 0, 0);
+        return true;
+    });
+
+    ipc_on("window.listChildren", [](const json&) -> json {
+        json arr = json::array();
+        for (auto& [id, cw] : g_children)
+            arr.push_back(id);
+        return arr;
+    });
+}
+
+// ================================================================
 //  Splash screen
 // ================================================================
 
@@ -1789,6 +2027,14 @@ int WINAPI wWinMain(HINSTANCE hi, HINSTANCE, LPWSTR, int ns) {
     g_titleBarH    = winCfg.value("titleBarHeight", g_frameless ? 40 : 0);
     g_borderSize   = winCfg.value("borderSize", 6);
     g_effectType   = parseEffectType(winCfg.value("effect", std::string{"none"}));
+
+    // Security: load permissions
+    if (g_cfg.contains("permissions") && g_cfg["permissions"].is_object()) {
+        for (auto& [k, v] : g_cfg["permissions"].items()) {
+            g_permissions[k] = v.get<bool>();
+        }
+    }
+
     auto bgHex     = winCfg.value("backgroundColor", std::string{"#1a1a2e"});
     COLORREF bgClr = parseHexColor(bgHex);
 
@@ -1885,6 +2131,8 @@ int WINAPI wWinMain(HINSTANCE hi, HINSTANCE, LPWSTR, int ns) {
     reg_registry();
     reg_protocol();
     reg_log();
+    reg_updater();
+    reg_multiwindow();
 
     // Show splash while WebView2 loads
     showSplash(hi, width, height);

@@ -1,0 +1,94 @@
+{
+  "mcpServers": {
+    "my-mcp-1": {
+      "command": "node",
+      "args": [
+        "C:/Users/11573/.cursor/my-mcp-server/index.mjs"
+      ],
+      "env": {
+        "WUKONG_SESSION": "1"
+      }
+    },
+    "my-mcp-2": {
+      "command": "node",
+      "args": [
+        "C:/Users/11573/.cursor/my-mcp-server/index.mjs"
+      ],
+      "env": {
+        "WUKONG_SESSION": "2"
+      }
+    },
+    "my-mcp-3": {
+      "command": "node",
+      "args": [
+        "C:/Users/11573/.cursor/my-mcp-server/index.mjs"
+      ],
+      "env": {
+        "WUKONG_SESSION": "3"
+      }
+    },
+    "my-mcp-4": {
+      "command": "node",
+      "args": [
+        "C:/Users/11573/.cursor/my-mcp-server/index.mjs"
+      ],
+      "env": {
+        "WUKONG_SESSION": "4"
+      }
+    },
+    "my-mcp-5": {
+      "command": "node",
+      "args": [
+        "C:/Users/11573/.cursor/my-mcp-server/index.mjs"
+      ],
+      "env": {
+        "WUKONG_SESSION": "5"
+      }
+    },
+    "my-mcp-6": {
+      "command": "node",
+      "args": [
+        "C:/Users/11573/.cursor/my-mcp-server/index.mjs"
+      ],
+      "env": {
+        "WUKONG_SESSION": "6"
+      }
+    },
+    "my-mcp-7": {
+      "command": "node",
+      "args": [
+        "C:/Users/11573/.cursor/my-mcp-server/index.mjs"
+      ],
+      "env": {
+        "WUKONG_SESSION": "7"
+      }
+    },
+    "my-mcp-8": {
+      "command": "node",
+      "args": [
+        "C:/Users/11573/.cursor/my-mcp-server/index.mjs"
+      ],
+      "env": {
+        "WUKONG_SESSION": "8"
+      }
+    },
+    "my-mcp-9": {
+      "command": "node",
+      "args": [
+        "C:/Users/11573/.cursor/my-mcp-server/index.mjs"
+      ],
+      "env": {
+        "WUKONG_SESSION": "9"
+      }
+    },
+    "my-mcp-10": {
+      "command": "node",
+      "args": [
+        "C:/Users/11573/.cursor/my-mcp-server/index.mjs"
+      ],
+      "env": {
+        "WUKONG_SESSION": "10"
+      }
+    }
+  }
+}

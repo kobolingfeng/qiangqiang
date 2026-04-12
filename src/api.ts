@@ -55,6 +55,10 @@ export const win = {
     startDrag:          () => invoke<boolean>('window.startDrag'),
     getConfig:      () => invoke<any>('window.getConfig'),
     isFrameless:    () => invoke<boolean>('window.isFrameless'),
+    createChild: (opts: { title?: string; width?: number; height?: number; url?: string }) =>
+        invoke<number>('window.createChild', opts),
+    closeChild:  (id: number) => invoke<boolean>('window.closeChild', { id }),
+    listChildren:() => invoke<number[]>('window.listChildren'),
     // Events
     onFocus:     (h: () => void) => on('window.focus', h),
     onBlur:      (h: () => void) => on('window.blur', h),
@@ -65,6 +69,7 @@ export const win = {
     onMoved:     (h: (data: { x: number; y: number }) => void) => on('window.moved', h),
     onClosing:   (h: () => void) => on('window.closing', h),
     onFileDrop:  (h: (data: { files: string[]; x: number; y: number }) => void) => on('window.fileDrop', h),
+    onChildClosed: (h: (data: { id: number }) => void) => on('window.childClosed', h),
 };
 
 // ── Dialogs ───────────────────────────────────
@@ -114,6 +119,9 @@ export const shell = {
 export const app = {
     exit:    (code = 0) => invoke<boolean>('app.exit', { code }),
     dataDir: () => invoke<string>('app.dataDir'),
+    checkUpdate:   (url: string) => invoke<any>('app.checkUpdate', { url }),
+    downloadUpdate:(url: string) => invoke<string>('app.downloadUpdate', { url }),
+    installUpdate: () => invoke<boolean>('app.installUpdate'),
 };
 
 // ── Tray ──────────────────────────────────────
