@@ -228,3 +228,52 @@ export const watcher = {
 export const devtools = {
     open: () => invoke<boolean>('devtools.open'),
 };
+
+// ── Registry ──────────────────────────────────
+
+export type RegistryRoot = 'HKCU' | 'HKLM' | 'HKCR' | 'HKU';
+
+export const registry = {
+    /** Read a value from the Windows registry. Returns string, number, or null. */
+    read: (root: RegistryRoot, path: string, name: string) =>
+        invoke<string | number | null>('registry.read', { root, path, name }),
+    /** Write a string or integer value to the registry. */
+    write: (root: RegistryRoot, path: string, name: string, value: string | number) =>
+        invoke<boolean>('registry.write', { root, path, name, value }),
+    /** Delete a registry value (or entire key if name is empty). */
+    delete: (root: RegistryRoot, path: string, name = '') =>
+        invoke<boolean>('registry.delete', { root, path, name }),
+    /** Check if a registry key exists. */
+    exists: (root: RegistryRoot, path: string) =>
+        invoke<boolean>('registry.exists', { root, path }),
+};
+
+// ── Deep Link / URL Protocol ──────────────────
+
+export const protocol = {
+    /** Register a custom URL protocol (e.g., "myapp" → myapp://...). */
+    register: (scheme: string, description?: string) =>
+        invoke<boolean>('protocol.register', { scheme, description }),
+    /** Unregister a custom URL protocol. */
+    unregister: (scheme: string) =>
+        invoke<boolean>('protocol.unregister', { scheme }),
+};
+
+// ── Logging ───────────────────────────────────
+
+export const log = {
+    /** Set the log file path. Pass empty string for default (data/app.log). Returns actual path. */
+    setFile: (path = '') => invoke<string>('log.setFile', { path }),
+    /** Write a log entry. Level: "info", "warn", "error", "debug". */
+    write: (message: string, level: 'info' | 'warn' | 'error' | 'debug' = 'info') =>
+        invoke<boolean>('log.write', { level, message }),
+    /** Clear the log file. */
+    clear: () => invoke<boolean>('log.clear'),
+    /** Get the current log file path, or null if not set. */
+    getPath: () => invoke<string | null>('log.getPath'),
+    // Convenience methods
+    info:  (message: string) => invoke<boolean>('log.write', { level: 'info', message }),
+    warn:  (message: string) => invoke<boolean>('log.write', { level: 'warn', message }),
+    error: (message: string) => invoke<boolean>('log.write', { level: 'error', message }),
+    debug: (message: string) => invoke<boolean>('log.write', { level: 'debug', message }),
+};

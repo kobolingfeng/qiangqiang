@@ -34,12 +34,17 @@
 #include <dwmapi.h>
 #include <windowsx.h>
 #include <winhttp.h>
+#include <mutex>
 
 #pragma comment(lib, "shlwapi.lib")
 #pragma comment(lib, "shell32.lib")
 #pragma comment(lib, "ole32.lib")
 #pragma comment(lib, "dwmapi.lib")
 #pragma comment(lib, "winhttp.lib")
+
+#ifdef SINGLE_EXE
+#include "resource.h"
+#endif
 
 #include "json.hpp"
 using json = nlohmann::json;
@@ -109,6 +114,29 @@ static int g_nextWatchId = 1;
 
 #define WM_FILE_CHANGED (WM_USER + 2)
 
+// Splash window
+static HWND g_splash = nullptr;
+
+// Logging
+static std::wstring g_logFile;
+static std::mutex   g_logMtx;
+
+// ================================================================
+//  Embedded resource loader (single-exe mode)
+// ================================================================
+
+#ifdef SINGLE_EXE
+static std::string loadResource(int id) {
+    HRSRC hRes = FindResourceW(nullptr, MAKEINTRESOURCE(id), RT_RCDATA);
+    if (!hRes) return {};
+    HGLOBAL hData = LoadResource(nullptr, hRes);
+    if (!hData) return {};
+    DWORD sz = SizeofResource(nullptr, hRes);
+    auto* ptr = (const char*)LockResource(hData);
+    return std::string(ptr, sz);
+}
+#endif
+
 // ================================================================
 //  Config loader
 // ================================================================
@@ -129,6 +157,12 @@ static json loadConfig(const std::wstring& dir) {
         std::ifstream f(path);
         if (f) { json j; f >> j; return j; }
     }
+#ifdef SINGLE_EXE
+    auto cfg = loadResource(IDR_CONFIG);
+    if (!cfg.empty()) {
+        try { return json::parse(cfg); } catch (...) {}
+    }
+#endif
     return json::object();
 }
 
@@ -936,6 +970,261 @@ static void reg_tray() {
 }
 
 // ================================================================
+//  Commands: Registry
+// ================================================================
+
+static HKEY parseRootKey(const std::string& root) {
+    if (root == "HKCU" || root == "HKEY_CURRENT_USER")   return HKEY_CURRENT_USER;
+    if (root == "HKLM" || root == "HKEY_LOCAL_MACHINE")   return HKEY_LOCAL_MACHINE;
+    if (root == "HKCR" || root == "HKEY_CLASSES_ROOT")    return HKEY_CLASSES_ROOT;
+    if (root == "HKU"  || root == "HKEY_USERS")           return HKEY_USERS;
+    return HKEY_CURRENT_USER;
+}
+
+static void reg_registry() {
+    ipc_on("registry.read", [](const json& a) -> json {
+        auto root = a.value("root", std::string{"HKCU"});
+        auto path = a.value("path", std::string{});
+        auto name = a.value("name", std::string{});
+        HKEY hKey;
+        if (RegOpenKeyExW(parseRootKey(root), U2W(path).c_str(), 0, KEY_READ, &hKey) != ERROR_SUCCESS)
+            return nullptr;
+        DWORD type, size = 0;
+        auto wName = U2W(name);
+        RegQueryValueExW(hKey, wName.c_str(), nullptr, &type, nullptr, &size);
+        if (size == 0) { RegCloseKey(hKey); return nullptr; }
+        std::vector<BYTE> buf(size);
+        RegQueryValueExW(hKey, wName.c_str(), nullptr, &type, buf.data(), &size);
+        RegCloseKey(hKey);
+        switch (type) {
+            case REG_SZ:
+            case REG_EXPAND_SZ:
+                return W2U(reinterpret_cast<wchar_t*>(buf.data()));
+            case REG_DWORD:
+                return (int)*reinterpret_cast<DWORD*>(buf.data());
+            case REG_QWORD:
+                return (int64_t)*reinterpret_cast<uint64_t*>(buf.data());
+            default:
+                return nullptr;
+        }
+    });
+    ipc_on("registry.write", [](const json& a) -> json {
+        auto root  = a.value("root", std::string{"HKCU"});
+        auto path  = a.value("path", std::string{});
+        auto name  = a.value("name", std::string{});
+        auto value = a["value"];
+        HKEY hKey;
+        if (RegCreateKeyExW(parseRootKey(root), U2W(path).c_str(), 0, nullptr,
+            0, KEY_WRITE, nullptr, &hKey, nullptr) != ERROR_SUCCESS)
+            throw std::runtime_error("Cannot open registry key");
+        auto wName = U2W(name);
+        LONG result;
+        if (value.is_string()) {
+            auto wVal = U2W(value.get<std::string>());
+            result = RegSetValueExW(hKey, wName.c_str(), 0, REG_SZ,
+                (const BYTE*)wVal.c_str(), (DWORD)((wVal.size()+1)*sizeof(wchar_t)));
+        } else if (value.is_number_integer()) {
+            DWORD dw = (DWORD)value.get<int>();
+            result = RegSetValueExW(hKey, wName.c_str(), 0, REG_DWORD, (const BYTE*)&dw, sizeof(dw));
+        } else {
+            RegCloseKey(hKey);
+            throw std::runtime_error("Unsupported value type");
+        }
+        RegCloseKey(hKey);
+        return result == ERROR_SUCCESS;
+    });
+    ipc_on("registry.delete", [](const json& a) -> json {
+        auto root = a.value("root", std::string{"HKCU"});
+        auto path = a.value("path", std::string{});
+        auto name = a.value("name", std::string{});
+        if (name.empty()) {
+            // Delete entire key
+            return RegDeleteTreeW(parseRootKey(root), U2W(path).c_str()) == ERROR_SUCCESS;
+        }
+        HKEY hKey;
+        if (RegOpenKeyExW(parseRootKey(root), U2W(path).c_str(), 0, KEY_WRITE, &hKey) != ERROR_SUCCESS)
+            return false;
+        auto result = RegDeleteValueW(hKey, U2W(name).c_str());
+        RegCloseKey(hKey);
+        return result == ERROR_SUCCESS;
+    });
+    ipc_on("registry.exists", [](const json& a) -> json {
+        auto root = a.value("root", std::string{"HKCU"});
+        auto path = a.value("path", std::string{});
+        HKEY hKey;
+        if (RegOpenKeyExW(parseRootKey(root), U2W(path).c_str(), 0, KEY_READ, &hKey) != ERROR_SUCCESS)
+            return false;
+        RegCloseKey(hKey);
+        return true;
+    });
+}
+
+// ================================================================
+//  Commands: Deep link / URL protocol
+// ================================================================
+
+static void reg_protocol() {
+    ipc_on("protocol.register", [](const json& a) -> json {
+        auto scheme = a.value("scheme", std::string{});
+        auto desc   = a.value("description", scheme + " Protocol");
+        if (scheme.empty()) throw std::runtime_error("scheme is required");
+
+        wchar_t exePath[MAX_PATH];
+        GetModuleFileNameW(nullptr, exePath, MAX_PATH);
+
+        auto wScheme = U2W(scheme);
+        auto regPath = L"Software\\Classes\\" + wScheme;
+
+        HKEY hKey;
+        // Create scheme key
+        if (RegCreateKeyExW(HKEY_CURRENT_USER, regPath.c_str(), 0, nullptr,
+            0, KEY_WRITE, nullptr, &hKey, nullptr) != ERROR_SUCCESS)
+            throw std::runtime_error("Cannot register protocol");
+
+        auto wDesc = U2W(desc);
+        RegSetValueExW(hKey, nullptr, 0, REG_SZ, (BYTE*)wDesc.c_str(), (DWORD)((wDesc.size()+1)*sizeof(wchar_t)));
+        auto urlProto = L"URL Protocol";
+        RegSetValueExW(hKey, L"URL Protocol", 0, REG_SZ, (BYTE*)L"", sizeof(wchar_t));
+        RegCloseKey(hKey);
+
+        // Create shell\open\command key
+        auto cmdPath = regPath + L"\\shell\\open\\command";
+        if (RegCreateKeyExW(HKEY_CURRENT_USER, cmdPath.c_str(), 0, nullptr,
+            0, KEY_WRITE, nullptr, &hKey, nullptr) != ERROR_SUCCESS)
+            throw std::runtime_error("Cannot register protocol command");
+
+        auto cmd = L"\"" + std::wstring(exePath) + L"\" \"%1\"";
+        RegSetValueExW(hKey, nullptr, 0, REG_SZ, (BYTE*)cmd.c_str(), (DWORD)((cmd.size()+1)*sizeof(wchar_t)));
+        RegCloseKey(hKey);
+        return true;
+    });
+    ipc_on("protocol.unregister", [](const json& a) -> json {
+        auto scheme = a.value("scheme", std::string{});
+        if (scheme.empty()) throw std::runtime_error("scheme is required");
+        auto regPath = L"Software\\Classes\\" + U2W(scheme);
+        return RegDeleteTreeW(HKEY_CURRENT_USER, regPath.c_str()) == ERROR_SUCCESS;
+    });
+}
+
+// ================================================================
+//  Commands: Logging
+// ================================================================
+
+static void writeLog(const std::string& level, const std::string& msg) {
+    if (g_logFile.empty()) return;
+    std::lock_guard<std::mutex> lock(g_logMtx);
+    std::ofstream f(g_logFile, std::ios::app);
+    if (!f) return;
+    SYSTEMTIME st; GetLocalTime(&st);
+    char ts[32];
+    snprintf(ts, sizeof(ts), "%04d-%02d-%02d %02d:%02d:%02d.%03d",
+             st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond, st.wMilliseconds);
+    f << "[" << ts << "] [" << level << "] " << msg << "\n";
+}
+
+static void reg_log() {
+    ipc_on("log.setFile", [](const json& a) -> json {
+        auto path = a.value("path", std::string{});
+        if (path.empty()) {
+            // Default to data/app.log
+            g_logFile = exe_dir() + L"\\data\\app.log";
+        } else {
+            g_logFile = U2W(path);
+        }
+        // Ensure parent directory exists
+        auto parent = fspath::path(g_logFile).parent_path();
+        fspath::create_directories(parent);
+        return W2U(g_logFile);
+    });
+    ipc_on("log.write", [](const json& a) -> json {
+        auto level = a.value("level", std::string{"info"});
+        auto msg   = a.value("message", std::string{});
+        writeLog(level, msg);
+        return true;
+    });
+    ipc_on("log.clear", [](const json&) -> json {
+        if (g_logFile.empty()) return false;
+        std::ofstream f(g_logFile, std::ios::trunc);
+        return f.good();
+    });
+    ipc_on("log.getPath", [](const json&) -> json {
+        return g_logFile.empty() ? nullptr : json(W2U(g_logFile));
+    });
+}
+
+// ================================================================
+//  Splash screen
+// ================================================================
+
+static LRESULT CALLBACK SplashProc(HWND h, UINT m, WPARAM w, LPARAM l) {
+    if (m == WM_PAINT) {
+        PAINTSTRUCT ps;
+        HDC hdc = BeginPaint(h, &ps);
+        RECT rc; GetClientRect(h, &rc);
+        // Background
+        auto bg = g_cfg.value("/window/backgroundColor"_json_pointer, std::string{"#1a1a2e"});
+        int r=26,g=26,b=46;
+        if (bg.size()>=7) { r=std::stoi(bg.substr(1,2),0,16); g=std::stoi(bg.substr(3,2),0,16); b=std::stoi(bg.substr(5,2),0,16); }
+        HBRUSH brush = CreateSolidBrush(RGB(r,g,b));
+        FillRect(hdc, &rc, brush);
+        DeleteObject(brush);
+        // Title text
+        SetBkMode(hdc, TRANSPARENT);
+        SetTextColor(hdc, RGB(200,200,200));
+        auto title = U2W(g_cfg.value("/window/title"_json_pointer, std::string{"\xe5\xbc\xba\xe5\xbc\xba"}));
+        HFONT hFont = CreateFontW(28, 0, 0, 0, FW_LIGHT, FALSE, FALSE, FALSE,
+            DEFAULT_CHARSET, 0, 0, CLEARTYPE_QUALITY, 0, L"Segoe UI");
+        auto old = SelectObject(hdc, hFont);
+        DrawTextW(hdc, title.c_str(), -1, &rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        // "Loading..." below
+        RECT rc2 = rc; rc2.top += 40;
+        HFONT hSmall = CreateFontW(14, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+            DEFAULT_CHARSET, 0, 0, CLEARTYPE_QUALITY, 0, L"Segoe UI");
+        SelectObject(hdc, hSmall);
+        SetTextColor(hdc, RGB(120,120,140));
+        DrawTextW(hdc, L"Loading...", -1, &rc2, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        SelectObject(hdc, old);
+        DeleteObject(hFont);
+        DeleteObject(hSmall);
+        EndPaint(h, &ps);
+        return 0;
+    }
+    return DefWindowProcW(h, m, w, l);
+}
+
+static void showSplash(HINSTANCE hi, int w, int h) {
+    if (!g_cfg.value("/window/splash"_json_pointer, false)) return;
+    WNDCLASSEXW sc{sizeof(sc)};
+    sc.lpfnWndProc  = SplashProc;
+    sc.hInstance     = hi;
+    sc.lpszClassName = L"QQ_Splash";
+    sc.hCursor       = LoadCursorW(nullptr, IDC_ARROW);
+    RegisterClassExW(&sc);
+
+    HMONITOR mon = MonitorFromPoint({0,0}, MONITOR_DEFAULTTOPRIMARY);
+    MONITORINFO mi{sizeof(mi)};
+    GetMonitorInfoW(mon, &mi);
+    int sw = 300, sh = 120;
+    int sx = mi.rcWork.left + (mi.rcWork.right - mi.rcWork.left - sw) / 2;
+    int sy = mi.rcWork.top + (mi.rcWork.bottom - mi.rcWork.top - sh) / 2;
+
+    g_splash = CreateWindowExW(WS_EX_TOOLWINDOW, L"QQ_Splash", L"",
+        WS_POPUP, sx, sy, sw, sh, nullptr, nullptr, hi, nullptr);
+    // DWM shadow
+    MARGINS m = {0,0,0,1};
+    DwmExtendFrameIntoClientArea(g_splash, &m);
+    ShowWindow(g_splash, SW_SHOW);
+    UpdateWindow(g_splash);
+}
+
+static void closeSplash() {
+    if (g_splash) {
+        DestroyWindow(g_splash);
+        g_splash = nullptr;
+    }
+}
+
+// ================================================================
 //  WebView2 initialization
 // ================================================================
 
@@ -1000,14 +1289,25 @@ static void init_webview() {
                     if (dev) {
                         g_view->Navigate(g_devUrl.c_str());
                     } else {
-                        auto dir = exe_dir();
-                        ComPtr<ICoreWebView2_3> v3;
-                        if (SUCCEEDED(g_view.As(&v3)))
-                            v3->SetVirtualHostNameToFolderMapping(
-                                L"app.local", dir.c_str(),
-                                COREWEBVIEW2_HOST_RESOURCE_ACCESS_KIND_ALLOW);
-                        g_view->Navigate(L"https://app.local/index.html");
+#ifdef SINGLE_EXE
+                        // Try embedded HTML first, fallback to virtual host
+                        auto embeddedHtml = loadResource(IDR_HTML);
+                        if (!embeddedHtml.empty()) {
+                            g_view->NavigateToString(U2W(embeddedHtml).c_str());
+                        } else
+#endif
+                        {
+                            auto dir = exe_dir();
+                            ComPtr<ICoreWebView2_3> v3;
+                            if (SUCCEEDED(g_view.As(&v3)))
+                                v3->SetVirtualHostNameToFolderMapping(
+                                    L"app.local", dir.c_str(),
+                                    COREWEBVIEW2_HOST_RESOURCE_ACCESS_KIND_ALLOW);
+                            g_view->Navigate(L"https://app.local/index.html");
+                        }
                     }
+                    // Close splash once WebView2 is ready
+                    closeSplash();
                     return S_OK;
                 }).Get());
         }).Get());
@@ -1019,6 +1319,17 @@ static void init_webview() {
 
 static LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM w, LPARAM l) {
     switch (m) {
+    // ── Suppress white border flash in frameless mode ──
+    case WM_NCPAINT:
+        if (g_frameless) return 0;
+        break;
+    case WM_NCACTIVATE:
+        if (g_frameless) return TRUE;
+        break;
+    case WM_ERASEBKGND:
+        if (g_frameless) return 1;
+        break;
+
     case WM_SIZE:
         if (g_ctrl) {
             RECT b; GetClientRect(h, &b);
@@ -1222,8 +1533,8 @@ int WINAPI wWinMain(HINSTANCE hi, HINSTANCE, LPWSTR, int ns) {
     RegisterClassExW(&wc);
 
     DWORD style = g_frameless
-        ? (WS_THICKFRAME | WS_MINIMIZEBOX | WS_MAXIMIZEBOX | WS_SYSMENU | WS_POPUP)
-        : WS_OVERLAPPEDWINDOW;
+        ? (WS_THICKFRAME | WS_MINIMIZEBOX | WS_MAXIMIZEBOX | WS_SYSMENU | WS_POPUP | WS_CLIPCHILDREN)
+        : (WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN);
 
     g_hwnd = CreateWindowExW(0, L"QQ", title.c_str(),
         style,
@@ -1271,6 +1582,12 @@ int WINAPI wWinMain(HINSTANCE hi, HINSTANCE, LPWSTR, int ns) {
     reg_watcher();
     reg_state();
     reg_devtools();
+    reg_registry();
+    reg_protocol();
+    reg_log();
+
+    // Show splash while WebView2 loads
+    showSplash(hi, width, height);
 
     init_webview();
 

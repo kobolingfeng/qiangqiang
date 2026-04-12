@@ -2,6 +2,7 @@ deps/
 dist/
 release/
 native/build/
+native/_embedded.*
 *.exe
 *.obj
 *.pdb

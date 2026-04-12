@@ -1,11 +1,15 @@
 // scripts/build.ts — Build frontend (Bun) + compile native shell (MSVC)
-import { existsSync, mkdirSync, unlinkSync } from 'fs';
+// Supports single-exe mode: embeds HTML+config as Win32 RCDATA resources
+import { existsSync, mkdirSync, unlinkSync, writeFileSync } from 'fs';
 import { join, resolve } from 'path';
 import { execSync } from 'child_process';
 
 const ROOT = resolve(import.meta.dir, '..');
 const DIST = join(ROOT, 'dist');
 const DEPS = join(ROOT, 'deps');
+
+// Check for --single-exe flag
+const singleExe = process.argv.includes('--single-exe');
 
 // ── Check deps ────────────────────────────────────────
 const wv2Inc = join(DEPS, 'webview2', 'build', 'native', 'include');
@@ -34,10 +38,22 @@ if (!result.success) {
     process.exit(1);
 }
 
-// Copy HTML, replace .ts → .js reference
+// Read built JS
+const jsContent = await Bun.file(join(DIST, 'main.js')).text();
+
+// Build HTML with inlined JS for single-exe, or external ref for normal mode
 let html = await Bun.file(join(ROOT, 'src', 'index.html')).text();
-html = html.replace('./main.ts', './main.js');
+if (singleExe) {
+    // Replace <script type="module" src="./main.ts"></script> with inline script
+    html = html.replace(
+        /<script[^>]*src=["']\.\/main\.ts["'][^>]*><\/script>/,
+        `<script type="module">${jsContent}</script>`
+    );
+} else {
+    html = html.replace('./main.ts', './main.js');
+}
 await Bun.write(join(DIST, 'index.html'), html);
+
 // Copy config
 const configSrc = join(ROOT, 'app.config.json');
 if (existsSync(configSrc)) {
@@ -45,7 +61,7 @@ if (existsSync(configSrc)) {
     await Bun.write(join(DIST, 'app.config.json'), cfg);
 }
 
-console.log('✓ Frontend built');
+console.log('✓ Frontend built' + (singleExe ? ' (single-exe: JS inlined)' : ''));
 
 // ── 2. Find MSVC ──────────────────────────────────────
 console.log('🔨 Compiling native shell...');
@@ -66,28 +82,57 @@ if (!vsPath) {
 
 const vcvarsall = join(vsPath, 'VC', 'Auxiliary', 'Build', 'vcvarsall.bat');
 
-// ── 3. Compile ────────────────────────────────────────
+// ── 3. Generate resource file for single-exe ──────────
 const mainCpp = join(ROOT, 'native', 'main.cpp');
 const outExe = join(DIST, 'app.exe');
 
-// Compile resource file if icon exists
+// Always compile icon resource
 const rcFile = join(ROOT, 'native', 'app.rc');
 const icoFile = join(ROOT, 'native', 'app.ico');
 const resFile = join(ROOT, 'native', 'app.res');
+
+if (singleExe) {
+    // Write embedded HTML and config as raw files next to the RC
+    const embeddedHtml = join(ROOT, 'native', '_embedded.html');
+    const embeddedCfg  = join(ROOT, 'native', '_embedded.json');
+    writeFileSync(embeddedHtml, html, 'utf-8');
+    const cfgContent = existsSync(configSrc) ? await Bun.file(configSrc).text() : '{}';
+    writeFileSync(embeddedCfg, cfgContent, 'utf-8');
+
+    // Generate dynamic RC
+    const rcContent = [
+        '#include "resource.h"',
+        ...(existsSync(icoFile) ? ['IDI_APP ICON "app.ico"'] : []),
+        'IDR_HTML   RCDATA "_embedded.html"',
+        'IDR_CONFIG RCDATA "_embedded.json"',
+    ].join('\n');
+    writeFileSync(rcFile, rcContent, 'utf-8');
+    console.log('  → Embedded HTML + config as RCDATA resources');
+} else {
+    // Standard icon-only RC
+    if (existsSync(icoFile)) {
+        writeFileSync(rcFile, 'IDI_APP ICON "app.ico"\n', 'utf-8');
+    }
+}
+
 let linkRes = '';
-if (existsSync(rcFile) && existsSync(icoFile)) {
-    const rcCmd = `call "${vcvarsall}" x64 >nul 2>&1 && rc /nologo /fo "${resFile}" "${rcFile}"`;
+if (existsSync(rcFile)) {
+    const rcCmd = `call "${vcvarsall}" x64 >nul 2>&1 && rc /nologo /I"${join(ROOT, 'native')}" /fo "${resFile}" "${rcFile}"`;
     try {
         execSync(rcCmd, { cwd: ROOT, stdio: 'inherit' });
         linkRes = `"${resFile}"`;
     } catch {
-        console.warn('⚠️ Resource compilation failed, building without icon');
+        console.warn('⚠️ Resource compilation failed, building without resources');
     }
 }
+
+// ── 4. Compile ────────────────────────────────────────
+const defines = singleExe ? '/DSINGLE_EXE' : '';
 
 const clArgs = [
     '/nologo /EHsc /O2 /std:c++20 /utf-8',
     '/DUNICODE /D_UNICODE',
+    defines,
     `"${mainCpp}"`,
     `/I"${wv2Inc}"`,
     `/I"${jsonInc}"`,
@@ -109,9 +154,19 @@ try {
 
 // Cleanup intermediate files
 Bun.spawnSync(['cmd', '/c', 'del /q *.obj 2>nul'], { cwd: ROOT });
-console.log('✓ Native shell compiled');
+if (singleExe) {
+    // Clean up temp embedded files
+    try { unlinkSync(join(ROOT, 'native', '_embedded.html')); } catch {}
+    try { unlinkSync(join(ROOT, 'native', '_embedded.json')); } catch {}
+}
+console.log('✓ Native shell compiled' + (singleExe ? ' (single-exe mode)' : ''));
 
 // ── Done ──────────────────────────────────────────────
-console.log(`\n✅ Build complete → ${DIST}`);
-console.log('   Run: bun run dev');
-console.log('   Or:  dist\\app.exe');
+if (singleExe) {
+    console.log(`\n✅ Single-exe build → ${outExe}`);
+    console.log('   The exe contains all HTML/JS/CSS + config. No external files needed.');
+} else {
+    console.log(`\n✅ Build complete → ${DIST}`);
+    console.log('   Run: bun run dev');
+    console.log('   Or:  dist\\app.exe');
+}

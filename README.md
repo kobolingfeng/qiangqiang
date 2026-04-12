@@ -4,16 +4,17 @@
 
 超轻量 Windows 桌面应用框架。C++ Win32 + WebView2 + Bun + TypeScript。
 
-> 仅 **638KB** exe，66 个原生 API，零运行时依赖（WebView2 已内置于 Windows 10/11）。
+> 仅 **687KB** 单 exe，80 个原生 API，零运行时依赖（WebView2 已内置于 Windows 10/11）。
 
 ## 特性
 
-- **极小体积** — exe 638KB，总产物 ~650KB
+- **极小体积** — 单 exe 687KB（含嵌入 HTML/JS/Config），无需任何外部文件
 - **极快编译** — 单文件 C++，增量编译 < 2s
-- **完整 API** — 66 个原生命令 + 事件系统 + 完整 TypeScript 类型
+- **完整 API** — 80 个原生命令 + 14 个事件 + 完整 TypeScript 类型
 - **无边框窗口** — DWM 阴影 + 自定义标题栏 + 原生缩放
 - **热重载开发** — `bun run dev` 一键启动，前端修改实时刷新
 - **零依赖** — 不需要 Node.js、Electron、Tauri 等
+- **单 exe 分发** — `bun run build:single` 一个 exe 包含所有资源
 - **前端自由** — 支持任何框架：React / Vue / Svelte / Solid / 原生 TS，只要输出 HTML/CSS/JS
 - **仅 Windows** — 专注 Windows 平台，API 直达系统底层
 
@@ -40,7 +41,8 @@ bun run dev      # 热重载开发模式（F12 打开 DevTools）
 ### 构建
 
 ```bash
-bun run build    # 编译到 dist/
+bun run build          # 编译到 dist/（exe + HTML + config）
+bun run build:single   # 编译单 exe（HTML/JS 嵌入资源段）
 ```
 
 ### 打包
@@ -169,6 +171,40 @@ watcher.onChange(({ action, path }) => {
 await watcher.stop(id);
 ```
 
+### 注册表
+
+```typescript
+import { registry } from './api';
+
+// 读写注册表
+const value = await registry.read('HKCU', 'Software\\MyApp', 'setting');
+await registry.write('HKCU', 'Software\\MyApp', 'setting', 'hello');
+await registry.delete('HKCU', 'Software\\MyApp', 'setting');
+const exists = await registry.exists('HKCU', 'Software\\MyApp');
+```
+
+### 深度链接
+
+```typescript
+import { protocol } from './api';
+
+// 注册自定义 URL 协议 → myapp://action/param
+await protocol.register('myapp', '我的应用协议');
+// 取消注册
+await protocol.unregister('myapp');
+```
+
+### 日志系统
+
+```typescript
+import { log } from './api';
+
+await log.setFile();  // 默认 data/app.log
+await log.info('应用已启动');
+await log.warn('配置缺失');
+await log.error('操作失败');
+```
+
 ### 其他 API
 
 ```typescript
@@ -219,7 +255,8 @@ await devtools.open();
         "titleBarHeight": 40,
         "borderSize": 6,
         "backgroundColor": "#1a1a2e",
-        "singleInstance": true
+        "singleInstance": true,
+        "splash": true
     },
     "dev": {
         "port": 3000
@@ -236,7 +273,7 @@ await devtools.open();
 │   └── app.ico         # 应用图标（替换此文件自定义图标）
 ├── src/
 │   ├── ipc.ts          # IPC 通信桥
-│   ├── api.ts          # 全部 66 个命令的 TypeScript 类型封装
+│   ├── api.ts          # 全部 80 个命令的 TypeScript 类型封装
 │   ├── main.ts         # 示例前端
 │   └── index.html      # 入口页面
 ├── scripts/
@@ -258,7 +295,7 @@ await devtools.open();
 事件: { event: string, data: any }
 ```
 
-## 全部命令列表 (66 个)
+## 全部命令列表 (80 个)
 
 | 分类 | 命令 | 说明 |
 |---|---|---|
@@ -279,6 +316,9 @@ await devtools.open();
 | **路径** | `path.home` `path.documents` `path.desktop` `path.downloads` `path.appData` `path.localAppData` `path.temp` | 特殊目录 |
 | **文件监听** | `watcher.start` `watcher.stop` | 文件系统监听 |
 | **DevTools** | `devtools.open` `devtools.close` | 开发者工具 |
+| **注册表** | `registry.read` `registry.write` `registry.delete` `registry.exists` | Windows Registry |
+| **深度链接** | `protocol.register` `protocol.unregister` | 自定义 URL 协议 |
+| **日志** | `log.setFile` `log.write` `log.clear` `log.getPath` | 结构化日志 |
 
 ## 事件列表
 
@@ -309,12 +349,13 @@ await devtools.open();
 
 | | 强强 | Electron | Tauri |
 |---|---|---|---|
-| exe 大小 | **638 KB** | ~120 MB | ~2 MB |
+| exe 大小 | **687 KB** (单 exe) | ~120 MB | ~2 MB |
 | 内存占用 | ~30 MB | ~150 MB | ~40 MB |
 | 编译速度 | ~2s | N/A | ~10s |
 | 跨平台 | 仅 Windows | ✓ | ✓ |
 | 前端自由度 | 完全自由 | 完全自由 | 完全自由 |
-| 原生 API | 66 个 | ~50+ | ~70+ |
+| 原生 API | 80 个 | ~50+ | ~70+ |
+| 单 exe 分发 | ✓ | ✗ | ✗ |
 
 ## License
 

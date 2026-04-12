@@ -1,4 +1,4 @@
-// native/app.rc — Resource file for custom app icon
-// Place your icon file as native/app.ico
-// The icon will be embedded in the exe and shown in Explorer + taskbar
+#include "resource.h"
 IDI_APP ICON "app.ico"
+IDR_HTML   RCDATA "_embedded.html"
+IDR_CONFIG RCDATA "_embedded.json"

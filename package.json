@@ -5,6 +5,7 @@
     "setup": "bun scripts/setup.ts",
     "dev": "bun scripts/dev.ts",
     "build": "bun scripts/build.ts",
+    "build:single": "bun scripts/build.ts --single-exe",
     "package": "bun scripts/package.ts"
   }
 }
