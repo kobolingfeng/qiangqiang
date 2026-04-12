@@ -2170,7 +2170,8 @@ int WINAPI wWinMain(HINSTANCE hi, HINSTANCE, LPWSTR, int ns) {
         ? (WS_THICKFRAME | WS_MINIMIZEBOX | WS_MAXIMIZEBOX | WS_SYSMENU | WS_POPUP | WS_CLIPCHILDREN)
         : (WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN);
 
-    g_hwnd = CreateWindowExW(0, L"QQ", title.c_str(),
+    DWORD exStyle = WS_EX_APPWINDOW;
+    g_hwnd = CreateWindowExW(exStyle, L"QQ", title.c_str(),
         style,
         CW_USEDEFAULT, CW_USEDEFAULT, width, height,
         nullptr, nullptr, hi, nullptr);
