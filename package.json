@@ -1,0 +1,10 @@
+{
+  "name": "qiangqiang",
+  "version": "0.0.1",
+  "scripts": {
+    "setup": "bun scripts/setup.ts",
+    "dev": "bun scripts/dev.ts",
+    "build": "bun scripts/build.ts",
+    "package": "bun scripts/package.ts"
+  }
+}
