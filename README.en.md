@@ -2,22 +2,25 @@
 
 **English** | [中文](README.md) | [LinuxDO](https://linux.do)
 
-<a href="https://paypal.me/koboling"><img src="https://img.shields.io/badge/PayPal-Sponsor-blue?logo=paypal" alt="PayPal"></a>
+---
 
-<details>
-<summary>WeChat Sponsor</summary>
-<img src="assets/wechat-sponsor.jpg" width="240" alt="WeChat QR">
-</details>
+❤️ **This project is built and maintained by one person in spare time. If you find it useful, please consider sponsoring to keep it going!**
+
+<a href="https://paypal.me/koboling"><img src="https://img.shields.io/badge/PayPal-Sponsor-blue?logo=paypal&style=for-the-badge" alt="PayPal Sponsor"></a>
+
+<img src="assets/wechat-sponsor.jpg" width="240" alt="WeChat Sponsor QR">
+
+---
 
 Ultra-lightweight Windows desktop app framework. C++ Win32 + WebView2 + Bun + TypeScript.
 
-> **638KB** exe. 66 native APIs. Zero runtime dependencies (WebView2 is built into Windows 10/11).
+> **884KB** single exe. 88 native APIs. Zero runtime dependencies (WebView2 is built into Windows 10/11).
 
 ## Features
 
-- **Tiny** — 638KB exe, ~650KB total distributable
+- **Tiny** — 884KB single exe with embedded HTML/JS/Config, no external files needed
 - **Fast build** — Single-file C++, incremental compile < 2s
-- **Full API** — 66 native commands + event system + full TypeScript types
+- **Full API** — 88 native commands + 15 events + full TypeScript types
 - **Frameless window** — DWM shadow + custom titlebar + native resize
 - **Hot reload** — `bun run dev` for instant frontend refresh
 - **Zero deps** — No Node.js, Electron, or Tauri needed
@@ -312,14 +315,26 @@ Recommended sizes: 16×16, 32×32, 48×48, 256×256.
 
 ## Comparison
 
-| | QiangQiang | Electron | Tauri |
-|---|---|---|---|
-| Exe size | **638 KB** | ~120 MB | ~2 MB |
-| Memory | ~30 MB | ~150 MB | ~40 MB |
-| Build time | ~2s | N/A | ~10s |
-| Cross-platform | Windows only | ✓ | ✓ |
-| Frontend freedom | Full | Full | Full |
-| Native APIs | 66 | ~50+ | ~70+ |
+| | QiangQiang | Wails | Tauri | Electron |
+|---|---|---|---|---|
+| Single exe size | **884 KB** | ~9 MB | ~2 MB | ~120 MB |
+| Memory usage | ~30 MB | ~50 MB | ~40 MB | ~150 MB |
+| Startup time | **~0.5s** | ~1s | ~0.5s | ~2s |
+| Build time | ~2s | ~10s | ~10s | N/A |
+| Cross-platform | Windows only | ✓ | ✓ | ✓ |
+| Frontend freedom | Full | Full | Full | Full |
+| Native APIs | 88 | ~30+ | ~70+ | ~50+ |
+| Single exe dist | ✓ | ✓ | ✗ | ✗ |
+| Runtime overhead | Zero (pure C++) | Go runtime ~5MB | Rust runtime ~2MB | Chromium |
+| Asset loading | Zero-copy mmap | Go embed | include_bytes! | asar |
+
+> Data based on comparison tests using the same Vue 3 frontend app (MoXian editor).
+
+## Example App
+
+[`examples/墨线.exe`](examples/) — A Markdown editor built with QiangQiang, only **884 KB** as a single exe. Double-click to run (requires Windows 10/11).
+
+The same app built with Wails as a single file would be **~9 MB** — QiangQiang is less than 1/10 the size, with faster startup and lower memory usage.
 
 ## License
 

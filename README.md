@@ -2,20 +2,23 @@
 
 [English](README.en.md) | **中文** | [LinuxDO](https://linux.do)
 
-<a href="https://paypal.me/koboling"><img src="https://img.shields.io/badge/PayPal-Sponsor-blue?logo=paypal" alt="PayPal"></a>
+---
 
-<details>
-<summary>微信赞赏</summary>
+❤️ **这个项目由一个人利用业余时间开发和维护。如果它对你有用，请考虑赞助支持，让我能继续做下去！**
+
+<a href="https://paypal.me/koboling"><img src="https://img.shields.io/badge/PayPal-赞助-blue?logo=paypal&style=for-the-badge" alt="PayPal 赞助"></a>
+
 <img src="assets/wechat-sponsor.jpg" width="240" alt="微信赞赏码">
-</details>
+
+---
 
 超轻量 Windows 桌面应用框架。C++ Win32 + WebView2 + Bun + TypeScript。
 
-> 仅 **687KB** 单 exe，80 个原生 API，零运行时依赖（WebView2 已内置于 Windows 10/11）。
+> 仅 **884KB** 单 exe，88 个原生 API，零运行时依赖（WebView2 已内置于 Windows 10/11）。
 
 ## 特性
 
-- **极小体积** — 单 exe 687KB（含嵌入 HTML/JS/Config），无需任何外部文件
+- **极小体积** — 单 exe 884KB（含嵌入 HTML/JS/Config），无需任何外部文件
 - **极快编译** — 单文件 C++，增量编译 < 2s
 - **完整 API** — 88 个原生命令 + 15 个事件 + 完整 TypeScript 类型
 - **真无边框窗口** — Composition 模式 WebView2（和 Wails/Tauri 同级），零像素边框 + DWM 阴影
@@ -503,15 +506,26 @@ await win.setEffect('none');     // 关闭特效
 
 ## 对比
 
-| | 强强 | Electron | Tauri |
-|---|---|---|---|
-| exe 大小 | **687 KB** (单 exe) | ~120 MB | ~2 MB |
-| 内存占用 | ~30 MB | ~150 MB | ~40 MB |
-| 编译速度 | ~2s | N/A | ~10s |
-| 跨平台 | 仅 Windows | ✓ | ✓ |
-| 前端自由度 | 完全自由 | 完全自由 | 完全自由 |
-| 原生 API | 80 个 | ~50+ | ~70+ |
-| 单 exe 分发 | ✓ | ✗ | ✗ |
+| | 强强 | Wails | Tauri | Electron |
+|---|---|---|---|---|
+| 单 exe 大小 | **884 KB** | ~9 MB | ~2 MB | ~120 MB |
+| 内存占用 | ~30 MB | ~50 MB | ~40 MB | ~150 MB |
+| 启动速度 | **~0.5s** | ~1s | ~0.5s | ~2s |
+| 编译速度 | ~2s | ~10s | ~10s | N/A |
+| 跨平台 | 仅 Windows | ✓ | ✓ | ✓ |
+| 前端自由度 | 完全自由 | 完全自由 | 完全自由 | 完全自由 |
+| 原生 API | 88 个 | ~30+ | ~70+ | ~50+ |
+| 单 exe 分发 | ✓ | ✓ | ✗ | ✗ |
+| 运行时开销 | 零（纯 C++） | Go 运行时 ~5MB | Rust 运行时 ~2MB | Chromium |
+| 资源加载 | 零拷贝内存映射 | Go embed | include_bytes! | asar |
+
+> 以上数据基于同一个 Vue 3 前端应用（墨线编辑器）的对比测试。
+
+## 示例应用
+
+[`examples/墨线.exe`](examples/) — 一个基于强强构建的 Markdown 编辑器，仅 **884 KB** 单 exe。双击即可运行（需要 Windows 10/11）。
+
+同样的应用使用 Wails 构建单文件需要 **~9 MB**，强强仅需不到 1/10 的体积，同时启动更快、内存占用更少。
 
 ## License
 

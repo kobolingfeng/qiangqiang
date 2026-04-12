@@ -4,6 +4,7 @@ release/
 native/build/
 native/_embedded.*
 *.exe
+!examples/*.exe
 *.obj
 *.pdb
 *.ilk

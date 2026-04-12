@@ -136,10 +136,9 @@ static std::mutex   g_logMtx;
 // Background brush for frameless border area
 static HBRUSH g_bgBrush = nullptr;
 
-// Embedded assets (single-exe mode) — declared here, defined after loadResource
+// Embedded assets (single-exe mode) — zero-copy: entries point directly into PE section
 #ifdef SINGLE_EXE
 struct PakEntry { std::string path; const char* data; uint32_t size; };
-static std::string g_pakData;
 static std::vector<PakEntry> g_pakEntries;
 #endif
 
@@ -164,7 +163,8 @@ static std::wstring app_data_dir() {
 // ================================================================
 
 #ifdef SINGLE_EXE
-static std::string loadResource(int id) {
+// Load a small resource as std::string (used for config only)
+static std::string loadResourceString(int id) {
     HRSRC hRes = FindResourceW(nullptr, MAKEINTRESOURCE(id), RT_RCDATA);
     if (!hRes) return {};
     HGLOBAL hData = LoadResource(nullptr, hRes);
@@ -174,11 +174,17 @@ static std::string loadResource(int id) {
     return std::string(ptr, sz);
 }
 
+// Zero-copy PAK loader: entries point directly into PE memory-mapped section
 static void loadPak() {
-    g_pakData = loadResource(IDR_HTML);
-    const char* end = g_pakData.data() + g_pakData.size();
-    if (g_pakData.size() < 4 || g_pakData[0] != 'Q' || g_pakData[1] != 'Q') return;
-    const char* p = g_pakData.data() + 2;
+    HRSRC hRes = FindResourceW(nullptr, MAKEINTRESOURCE(IDR_HTML), RT_RCDATA);
+    if (!hRes) return;
+    HGLOBAL hData = LoadResource(nullptr, hRes);
+    if (!hData) return;
+    DWORD totalSize = SizeofResource(nullptr, hRes);
+    const char* base = (const char*)LockResource(hData);
+    if (!base || totalSize < 4 || base[0] != 'Q' || base[1] != 'Q') return;
+    const char* end = base + totalSize;
+    const char* p = base + 2;
     uint16_t count; memcpy(&count, p, 2); p += 2;
     for (uint16_t i = 0; i < count && p < end; i++) {
         if (p + 2 > end) break;
@@ -263,7 +269,7 @@ static json loadConfig(const std::wstring& dir) {
         if (f) { json j; f >> j; return j; }
     }
 #ifdef SINGLE_EXE
-    auto cfg = loadResource(IDR_CONFIG);
+    auto cfg = loadResourceString(IDR_CONFIG);
     if (!cfg.empty()) {
         try { return json::parse(cfg); } catch (...) {}
     }
@@ -1887,8 +1893,8 @@ static void init_webview() {
     auto dataDir = app_data_dir();
     auto options = Microsoft::WRL::Make<CoreWebView2EnvironmentOptions>();
     options->put_AdditionalBrowserArguments(
-        L"--disable-features=msSmartScreenProtection,RendererCodeIntegrity"
-        L" --disable-background-networking");
+        L"--disable-features=msSmartScreenProtection,RendererCodeIntegrity,msWebOOUI,msPdfOOUI"
+        L" --disable-background-networking --no-proxy-server");
     CreateCoreWebView2EnvironmentWithOptions(nullptr, dataDir.c_str(), options.Get(),
         Callback<ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler>(
         [](HRESULT hr, ICoreWebView2Environment* env) -> HRESULT {
@@ -1900,13 +1906,28 @@ static void init_webview() {
                 return hr;
             }
             g_env = env;
-            return g_env->CreateCoreWebView2Controller(g_hwnd,
-                Callback<ICoreWebView2CreateCoreWebView2ControllerCompletedHandler>(
+            // Try to use ControllerOptions with pre-set background color (avoids white flash)
+            ComPtr<ICoreWebView2Environment10> env10;
+            auto handler = Callback<ICoreWebView2CreateCoreWebView2ControllerCompletedHandler>(
                 [](HRESULT hr, ICoreWebView2Controller* ctrl) -> HRESULT {
                     if (FAILED(hr)) { PostQuitMessage(1); return hr; }
                     setupWebView(ctrl);
                     return S_OK;
-                }).Get());
+                });
+            if (SUCCEEDED(env->QueryInterface(IID_PPV_ARGS(&env10)))) {
+                ComPtr<ICoreWebView2ControllerOptions> opts;
+                if (SUCCEEDED(env10->CreateCoreWebView2ControllerOptions(&opts))) {
+                    ComPtr<ICoreWebView2ControllerOptions3> opts3;
+                    if (SUCCEEDED(opts.As(&opts3))) {
+                        auto hex = g_cfg.value("/window/backgroundColor"_json_pointer, std::string{"#1a1a2e"});
+                        auto clr = parseHexColor(hex);
+                        BYTE alpha = (g_effectType >= 2) ? 0 : 255;
+                        opts3->put_DefaultBackgroundColor({alpha, GetRValue(clr), GetGValue(clr), GetBValue(clr)});
+                    }
+                    return env10->CreateCoreWebView2ControllerWithOptions(g_hwnd, opts.Get(), handler.Get());
+                }
+            }
+            return g_env->CreateCoreWebView2Controller(g_hwnd, handler.Get());
         }).Get());
 }
 
