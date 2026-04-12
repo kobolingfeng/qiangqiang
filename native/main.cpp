@@ -26,6 +26,7 @@
 #include <shobjidl.h>
 #include <wrl.h>
 #include <WebView2.h>
+#include <WebView2EnvironmentOptions.h>
 #include <string>
 #include <functional>
 #include <unordered_map>
@@ -1490,7 +1491,7 @@ static void reg_multiwindow() {
                 if (!url.empty()) {
                     cw->view->Navigate(U2W(url).c_str());
                 } else {
-                    cw->view->Navigate(L"https://app.local/index.html");
+                    cw->view->Navigate(L"http://app.localhost/index.html");
                 }
                 return S_OK;
             }).Get());
@@ -1814,23 +1815,49 @@ static void setupWebView(ICoreWebView2Controller* ctrl) {
     } else {
 #ifdef SINGLE_EXE
         if (!g_pakEntries.empty()) {
-            // Extract pak to temp and serve via virtual host
-            wchar_t tempBuf[MAX_PATH];
-            GetTempPathW(MAX_PATH, tempBuf);
-            auto tempDir = std::wstring(tempBuf) + L"qqapp_embedded\\";
-            for (auto& e : g_pakEntries) {
-                auto filePath = tempDir + U2W(e.path);
-                auto parent = fspath::path(filePath).parent_path();
-                fspath::create_directories(parent);
-                std::ofstream f(filePath, std::ios::binary | std::ios::trunc);
-                f.write(e.data, e.size);
-            }
-            ComPtr<ICoreWebView2_3> v3;
-            if (SUCCEEDED(g_view.As(&v3)))
-                v3->SetVirtualHostNameToFolderMapping(
-                    L"app.local", tempDir.c_str(),
-                    COREWEBVIEW2_HOST_RESOURCE_ACCESS_KIND_ALLOW);
-            g_view->Navigate(L"https://app.local/index.html");
+            // Serve resources directly from memory — zero disk I/O
+            g_view->AddWebResourceRequestedFilter(
+                L"http://app.localhost/*", COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL);
+            g_view->add_WebResourceRequested(
+                Callback<ICoreWebView2WebResourceRequestedEventHandler>(
+                [](ICoreWebView2*, ICoreWebView2WebResourceRequestedEventArgs* args) -> HRESULT {
+                    ComPtr<ICoreWebView2WebResourceRequest> request;
+                    args->get_Request(&request);
+                    LPWSTR uri;
+                    request->get_Uri(&uri);
+                    std::wstring wUri(uri);
+                    CoTaskMemFree(uri);
+
+                    const std::wstring prefix = L"http://app.localhost/";
+                    std::string path;
+                    if (wUri.size() > prefix.size())
+                        path = W2U(wUri.substr(prefix.size()));
+                    // Strip query string and fragment
+                    auto qpos = path.find('?');
+                    if (qpos != std::string::npos) path = path.substr(0, qpos);
+                    auto hpos = path.find('#');
+                    if (hpos != std::string::npos) path = path.substr(0, hpos);
+                    if (path.empty()) path = "index.html";
+
+                    auto* entry = findPakEntry(path);
+                    if (!entry) return S_OK; // 404 — let WebView2 handle
+
+                    auto mime = guessMimeType(path);
+                    ComPtr<IStream> stream;
+                    stream.Attach(SHCreateMemStream(
+                        reinterpret_cast<const BYTE*>(entry->data), entry->size));
+                    if (!stream) return S_OK;
+
+                    ComPtr<ICoreWebView2WebResourceResponse> response;
+                    g_env->CreateWebResourceResponse(
+                        stream.Get(), 200, L"OK",
+                        (L"Content-Type: " + mime).c_str(),
+                        &response);
+                    args->put_Response(response.Get());
+                    return S_OK;
+                }).Get(), nullptr);
+
+            g_view->Navigate(L"http://app.localhost/index.html");
         } else
 #endif
         {
@@ -1838,9 +1865,9 @@ static void setupWebView(ICoreWebView2Controller* ctrl) {
             ComPtr<ICoreWebView2_3> v3;
             if (SUCCEEDED(g_view.As(&v3)))
                 v3->SetVirtualHostNameToFolderMapping(
-                    L"app.local", dir.c_str(),
+                    L"app.localhost", dir.c_str(),
                     COREWEBVIEW2_HOST_RESOURCE_ACCESS_KIND_ALLOW);
-            g_view->Navigate(L"https://app.local/index.html");
+            g_view->Navigate(L"https://app.localhost/index.html");
         }
     }
     g_view->add_NavigationCompleted(
@@ -1858,7 +1885,11 @@ static void setupWebView(ICoreWebView2Controller* ctrl) {
 
 static void init_webview() {
     auto dataDir = app_data_dir();
-    CreateCoreWebView2EnvironmentWithOptions(nullptr, dataDir.c_str(), nullptr,
+    auto options = Microsoft::WRL::Make<CoreWebView2EnvironmentOptions>();
+    options->put_AdditionalBrowserArguments(
+        L"--disable-features=msSmartScreenProtection,RendererCodeIntegrity"
+        L" --disable-background-networking");
+    CreateCoreWebView2EnvironmentWithOptions(nullptr, dataDir.c_str(), options.Get(),
         Callback<ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler>(
         [](HRESULT hr, ICoreWebView2Environment* env) -> HRESULT {
             if (FAILED(hr)) {
@@ -2245,19 +2276,13 @@ int WINAPI wWinMain(HINSTANCE hi, HINSTANCE, LPWSTR, int ns) {
     reg_multiwindow();
     reg_extras();
 
-    // Show splash while WebView2 loads
-    showSplash(hi, width, height);
+    // Show window immediately with background color (don't wait for WebView2)
+    ShowWindow(g_hwnd, ns);
+    UpdateWindow(g_hwnd);
 
     init_webview();
 
-    // Synchronous wait for WebView2 to be ready (like Wails)
     MSG msg;
-    while (!g_webviewReady && GetMessageW(&msg, nullptr, 0, 0)) {
-        TranslateMessage(&msg);
-        DispatchMessageW(&msg);
-    }
-    ShowWindow(g_hwnd, ns);
-
     while (GetMessageW(&msg, nullptr, 0, 0)) {
         TranslateMessage(&msg);
         DispatchMessageW(&msg);
