@@ -1,87 +1,88 @@
-# QiangQiang (强强)
+# 强强 (QiangQiang)
 
-**English** | [中文](README.zh-CN.md)
+[English](README.en.md) | **中文**
 
-Ultra-lightweight Windows desktop app framework. C++ Win32 + WebView2 + Bun + TypeScript.
+超轻量 Windows 桌面应用框架。C++ Win32 + WebView2 + Bun + TypeScript。
 
-> **638KB** exe. 66 native APIs. Zero runtime dependencies (WebView2 is built into Windows 10/11).
+> 仅 **638KB** exe，66 个原生 API，零运行时依赖（WebView2 已内置于 Windows 10/11）。
 
-## Features
+## 特性
 
-- **Tiny** — 638KB exe, ~650KB total distributable
-- **Fast build** — Single-file C++, incremental compile < 2s
-- **Full API** — 66 native commands + event system + full TypeScript types
-- **Frameless window** — DWM shadow + custom titlebar + native resize
-- **Hot reload** — `bun run dev` for instant frontend refresh
-- **Zero deps** — No Node.js, Electron, or Tauri needed
-- **Windows-only** — Dedicated to Windows, direct Win32 API access
+- **极小体积** — exe 638KB，总产物 ~650KB
+- **极快编译** — 单文件 C++，增量编译 < 2s
+- **完整 API** — 66 个原生命令 + 事件系统 + 完整 TypeScript 类型
+- **无边框窗口** — DWM 阴影 + 自定义标题栏 + 原生缩放
+- **热重载开发** — `bun run dev` 一键启动，前端修改实时刷新
+- **零依赖** — 不需要 Node.js、Electron、Tauri 等
+- **前端自由** — 支持任何框架：React / Vue / Svelte / Solid / 原生 TS，只要输出 HTML/CSS/JS
+- **仅 Windows** — 专注 Windows 平台，API 直达系统底层
 
-## Quick Start
+## 快速开始
 
-### Prerequisites
+### 前置要求
 
-- [Bun](https://bun.sh) — Frontend build tool & scripts
-- [Visual Studio Build Tools 2022](https://visualstudio.microsoft.com/downloads/#build-tools-for-visual-studio-2022) — C++ compiler (select "Desktop development with C++")
+- [Bun](https://bun.sh) — 前端构建 + 脚本
+- [Visual Studio Build Tools 2022](https://visualstudio.microsoft.com/downloads/#build-tools-for-visual-studio-2022) — C++ 编译器（勾选"使用 C++ 的桌面开发"）
 
-### Install
+### 安装
 
 ```bash
 bun install
-bun run setup    # Downloads WebView2 SDK + JSON library
+bun run setup    # 下载 WebView2 SDK + JSON 库
 ```
 
-### Develop
+### 开发
 
 ```bash
-bun run dev      # Hot-reload dev mode (F12 opens DevTools)
+bun run dev      # 热重载开发模式（F12 打开 DevTools）
 ```
 
-### Build
+### 构建
 
 ```bash
-bun run build    # Compiles to dist/
+bun run build    # 编译到 dist/
 ```
 
-### Package
+### 打包
 
 ```bash
-bun run package  # Creates release/强强-portable.zip
+bun run package  # 生成 release/强强-portable.zip
 ```
 
-## API Overview
+## API 总览
 
-### Window Management (16 commands + 9 events)
+### 窗口管理 (16 命令 + 9 事件)
 
 ```typescript
 import { win } from './api';
 
-await win.setTitle('My App');
+await win.setTitle('我的应用');
 await win.setSize(1280, 720);
 await win.center();
 await win.maximize();
 await win.setAlwaysOnTop(true);
-await win.startDrag();  // Custom titlebar dragging
+await win.startDrag();  // 自定义标题栏拖拽
 
-// Event listeners
+// 事件监听
 win.onResized(({ w, h }) => console.log(`${w}×${h}`));
-win.onFocus(() => console.log('focused'));
-win.onFileDrop(({ files }) => console.log('dropped:', files));
+win.onFocus(() => console.log('获得焦点'));
+win.onFileDrop(({ files }) => console.log('拖入文件:', files));
 ```
 
-### Dialogs (5 commands)
+### 对话框 (5 命令)
 
 ```typescript
 import { dialog } from './api';
 
 const path = await dialog.openFile({
-    filters: [{ name: 'Images', extensions: ['png', 'jpg'] }],
+    filters: [{ name: '图片', extensions: ['png', 'jpg'] }],
     multiple: true
 });
 const savePath = await dialog.saveFile({ defaultName: 'output.txt' });
-const ok = await dialog.confirm('Confirm', 'Continue?');
+const ok = await dialog.confirm('确认', '是否继续？');
 ```
 
-### File System (8 commands)
+### 文件系统 (8 命令)
 
 ```typescript
 import { fs } from './api';
@@ -92,7 +93,7 @@ const entries = await fs.readDir('C:\\Users');
 const stat = await fs.stat('C:\\Windows\\notepad.exe');
 ```
 
-### HTTP Client (bypasses CORS)
+### HTTP 客户端 (绕过 CORS)
 
 ```typescript
 import { http } from './api';
@@ -100,62 +101,62 @@ import { http } from './api';
 const res = await http.get('https://api.github.com/repos/user/repo');
 console.log(JSON.parse(res.body));
 
-const res2 = await http.post('https://httpbin.org/post',
+const res2 = await http.post('https://httpbin.org/post', 
     JSON.stringify({ key: 'value' }),
     { 'Content-Type': 'application/json' }
 );
 ```
 
-### Global Hotkeys
+### 全局快捷键
 
 ```typescript
 import { hotkey, MOD, VK } from './api';
 
 await hotkey.register(1, MOD.CONTROL | MOD.SHIFT, VK.A);
 hotkey.onTriggered(({ id }) => {
-    if (id === 1) console.log('Ctrl+Shift+A triggered!');
+    if (id === 1) console.log('Ctrl+Shift+A 触发！');
 });
 ```
 
-### Context Menu
+### 右键菜单
 
 ```typescript
 import { menu } from './api';
 
 const idx = await menu.popup([
-    { label: 'Copy' },
-    { label: 'Paste' },
-    '-',  // separator
-    { label: 'Delete', disabled: true },
+    { label: '复制' },
+    { label: '粘贴' },
+    '-',  // 分隔线
+    { label: '删除', disabled: true },
 ]);
-if (idx === 0) { /* copy */ }
+if (idx === 0) { /* 复制 */ }
 ```
 
-### System Tray
+### 系统托盘
 
 ```typescript
-import { tray, menu, app, win } from './api';
+import { tray } from './api';
 
-await tray.create('My App');
+await tray.create('我的应用');
 tray.onClick(() => win.show());
 tray.onRightClick(async () => {
     const idx = await menu.popup([
-        { label: 'Show' },
-        { label: 'Quit' },
+        { label: '显示' },
+        { label: '退出' },
     ]);
     if (idx === 1) app.exit();
 });
 ```
 
-### Notifications
+### 系统通知
 
 ```typescript
 import { notification } from './api';
 
-await notification.show('Download Complete', 'File saved to desktop');
+await notification.show('下载完成', '文件已保存到桌面');
 ```
 
-### File Watcher
+### 文件监听
 
 ```typescript
 import { watcher } from './api';
@@ -164,31 +165,33 @@ const id = await watcher.start('C:\\my-project\\src');
 watcher.onChange(({ action, path }) => {
     console.log(`${action}: ${path}`);
 });
+// 不需要时停止
 await watcher.stop(id);
 ```
 
-### More APIs
+### 其他 API
 
 ```typescript
 import { os, path, env, clipboard, shell, devtools } from './api';
 
-// System info
+// 系统信息
 await os.version();   // "10.0.22631"
 await os.hostname();  // "MY-PC"
 await os.username();  // "admin"
 await os.locale();    // "zh-CN"
 
-// Special directories
+// 特殊目录
 await path.home();       // "C:\Users\admin"
 await path.documents();  // "C:\Users\admin\Documents"
 await path.downloads();  // "C:\Users\admin\Downloads"
-await path.temp();       // temp directory
+await path.desktop();    // "C:\Users\admin\Desktop"
+await path.temp();       // "C:\Users\admin\AppData\Local\Temp\"
 
-// Environment variables
+// 环境变量
 await env.get('PATH');
 await env.getAll();
 
-// Clipboard
+// 剪贴板
 await clipboard.writeText('Hello!');
 const text = await clipboard.readText();
 
@@ -196,18 +199,18 @@ const text = await clipboard.readText();
 await shell.open('https://github.com');
 await shell.execute('notepad.exe', ['file.txt']);
 
-// DevTools (dev mode only)
+// DevTools (开发模式)
 await devtools.open();
 ```
 
-## Configuration
+## 配置文件
 
 `app.config.json`:
 
 ```json
 {
     "window": {
-        "title": "My App",
+        "title": "我的应用",
         "width": 1024,
         "height": 768,
         "minWidth": 400,
@@ -224,94 +227,94 @@ await devtools.open();
 }
 ```
 
-## Project Structure
+## 项目结构
 
 ```
 ├── native/
-│   ├── main.cpp        # C++ shell (~1000 lines)
-│   ├── app.rc          # Resource file
-│   └── app.ico         # App icon (replace to customize)
+│   ├── main.cpp        # C++ 壳 (~1000 行)
+│   ├── app.rc          # 资源文件
+│   └── app.ico         # 应用图标（替换此文件自定义图标）
 ├── src/
-│   ├── ipc.ts          # IPC communication bridge
-│   ├── api.ts          # TypeScript wrappers for all 66 commands
-│   ├── main.ts         # Demo frontend
-│   └── index.html      # Entry page
+│   ├── ipc.ts          # IPC 通信桥
+│   ├── api.ts          # 全部 66 个命令的 TypeScript 类型封装
+│   ├── main.ts         # 示例前端
+│   └── index.html      # 入口页面
 ├── scripts/
-│   ├── setup.ts        # Download dependencies
-│   ├── build.ts        # Build frontend + native shell
-│   ├── dev.ts          # Dev server + hot reload
-│   └── package.ts      # Package for distribution
-├── app.config.json     # App configuration
+│   ├── setup.ts        # 下载依赖
+│   ├── build.ts        # 编译前端 + 原生壳
+│   ├── dev.ts          # 开发服务器 + 热重载
+│   └── package.ts      # 打包
+├── app.config.json     # 应用配置
 └── package.json
 ```
 
-## IPC Protocol
+## IPC 协议
 
-Frontend communicates with the native shell via `window.chrome.webview.postMessage`:
+前端通过 `window.chrome.webview.postMessage` 与原生壳通信：
 
 ```
-Request:  { id: number, cmd: string, args: object }
-Response: { id: number, result: any } | { id: number, error: string }
-Event:    { event: string, data: any }
+请求: { id: number, cmd: string, args: object }
+响应: { id: number, result: any } | { id: number, error: string }
+事件: { event: string, data: any }
 ```
 
-## All Commands (66)
+## 全部命令列表 (66 个)
 
-| Category | Commands |
-|---|---|
-| **Window** | `setTitle` `minimize` `maximize` `restore` `close` `show` `hide` `size` `setSize` `position` `setPosition` `center` `setAlwaysOnTop` `isMaximized` `startDrag` `isFrameless` |
-| **Window Config** | `getConfig` `saveState` `loadState` |
-| **Dialogs** | `openFile` `saveFile` `openFolder` `message` `confirm` |
-| **File System** | `readTextFile` `writeTextFile` `exists` `readDir` `mkdir` `remove` `rename` `stat` |
-| **Clipboard** | `readText` `writeText` |
-| **Shell** | `open` `execute` |
-| **App** | `exit` `dataDir` |
-| **Tray** | `create` `setTooltip` `remove` |
-| **Environment** | `get` `getAll` |
-| **Hotkeys** | `register` `unregister` `unregisterAll` |
-| **Notification** | `show` |
-| **Menu** | `popup` |
-| **HTTP** | `request` |
-| **OS** | `platform` `arch` `version` `hostname` `username` `locale` |
-| **Paths** | `home` `documents` `desktop` `downloads` `appData` `localAppData` `temp` |
-| **Watcher** | `start` `stop` |
-| **DevTools** | `open` `close` |
-
-## Events (14)
-
-| Event | Data | Description |
+| 分类 | 命令 | 说明 |
 |---|---|---|
-| `window.focus` | — | Window gained focus |
-| `window.blur` | — | Window lost focus |
-| `window.maximized` | — | Window maximized |
-| `window.minimized` | — | Window minimized |
-| `window.restored` | — | Window restored |
-| `window.resized` | `{ w, h }` | Window resized |
-| `window.moved` | `{ x, y }` | Window moved |
-| `window.closing` | — | Window about to close |
-| `window.fileDrop` | `{ files, x, y }` | Files dropped onto window |
-| `hotkey.triggered` | `{ id }` | Global hotkey triggered |
-| `watcher.changed` | `{ id, action, path }` | File system change |
-| `tray.click` | — | Tray icon clicked |
-| `tray.doubleClick` | — | Tray icon double-clicked |
-| `tray.rightClick` | — | Tray icon right-clicked |
+| **窗口** | `window.setTitle` `window.minimize` `window.maximize` `window.restore` `window.close` `window.show` `window.hide` `window.size` `window.setSize` `window.position` `window.setPosition` `window.center` `window.setAlwaysOnTop` `window.isMaximized` `window.startDrag` `window.isFrameless` | 窗口管理 |
+| **窗口配置** | `window.getConfig` `window.saveState` `window.loadState` | 配置 + 持久化 |
+| **对话框** | `dialog.openFile` `dialog.saveFile` `dialog.openFolder` `dialog.message` `dialog.confirm` | 系统对话框 |
+| **文件系统** | `fs.readTextFile` `fs.writeTextFile` `fs.exists` `fs.readDir` `fs.mkdir` `fs.remove` `fs.rename` `fs.stat` | 文件操作 |
+| **剪贴板** | `clipboard.readText` `clipboard.writeText` | 剪贴板 |
+| **Shell** | `shell.open` `shell.execute` | Shell 操作 |
+| **应用** | `app.exit` `app.dataDir` | 应用控制 |
+| **托盘** | `tray.create` `tray.setTooltip` `tray.remove` | 系统托盘 |
+| **环境变量** | `env.get` `env.getAll` | 环境变量 |
+| **快捷键** | `hotkey.register` `hotkey.unregister` `hotkey.unregisterAll` | 全局热键 |
+| **通知** | `notification.show` | 系统通知 |
+| **菜单** | `menu.popup` | 右键菜单 |
+| **HTTP** | `http.request` | 原生 HTTP (绕过 CORS) |
+| **OS** | `os.platform` `os.arch` `os.version` `os.hostname` `os.username` `os.locale` | 系统信息 |
+| **路径** | `path.home` `path.documents` `path.desktop` `path.downloads` `path.appData` `path.localAppData` `path.temp` | 特殊目录 |
+| **文件监听** | `watcher.start` `watcher.stop` | 文件系统监听 |
+| **DevTools** | `devtools.open` `devtools.close` | 开发者工具 |
 
-## Custom Icon
+## 事件列表
 
-Replace `native/app.ico` with your icon file and rebuild with `bun run build`.
+| 事件 | 数据 | 说明 |
+|---|---|---|
+| `window.focus` | — | 窗口获得焦点 |
+| `window.blur` | — | 窗口失去焦点 |
+| `window.maximized` | — | 窗口最大化 |
+| `window.minimized` | — | 窗口最小化 |
+| `window.restored` | — | 窗口还原 |
+| `window.resized` | `{ w, h }` | 窗口大小改变 |
+| `window.moved` | `{ x, y }` | 窗口位置改变 |
+| `window.closing` | — | 窗口即将关闭 |
+| `window.fileDrop` | `{ files, x, y }` | 文件拖放到窗口 |
+| `hotkey.triggered` | `{ id }` | 全局快捷键触发 |
+| `watcher.changed` | `{ id, action, path }` | 文件变更 |
+| `tray.click` | — | 托盘单击 |
+| `tray.doubleClick` | — | 托盘双击 |
+| `tray.rightClick` | — | 托盘右击 |
 
-Recommended sizes: 16×16, 32×32, 48×48, 256×256.
+## 自定义图标
 
-## Comparison
+替换 `native/app.ico` 为你的图标文件，重新 `bun run build` 即可。
 
-| | QiangQiang | Electron | Tauri |
+推荐包含以下尺寸：16×16, 32×32, 48×48, 256×256。
+
+## 对比
+
+| | 强强 | Electron | Tauri |
 |---|---|---|---|
-| Exe size | **638 KB** | ~120 MB | ~2 MB |
-| Memory | ~30 MB | ~150 MB | ~40 MB |
-| Build time | ~2s | N/A | ~10s |
-| Cross-platform | Windows only | ✓ | ✓ |
-| Frontend freedom | Full | Full | Full |
-| Native APIs | 66 | ~50+ | ~70+ |
+| exe 大小 | **638 KB** | ~120 MB | ~2 MB |
+| 内存占用 | ~30 MB | ~150 MB | ~40 MB |
+| 编译速度 | ~2s | N/A | ~10s |
+| 跨平台 | 仅 Windows | ✓ | ✓ |
+| 前端自由度 | 完全自由 | 完全自由 | 完全自由 |
+| 原生 API | 66 个 | ~50+ | ~70+ |
 
 ## License
 
