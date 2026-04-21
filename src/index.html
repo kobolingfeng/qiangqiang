@@ -88,6 +88,11 @@
             max-height: 12em;
             overflow-y: auto;
         }
+        /* Resize cursors — applied via body.rz-* class, !important wins over per-element cursors */
+        body.rz-ew,   body.rz-ew   * { cursor: ew-resize   !important; }
+        body.rz-ns,   body.rz-ns   * { cursor: ns-resize   !important; }
+        body.rz-nwse, body.rz-nwse * { cursor: nwse-resize !important; }
+        body.rz-nesw, body.rz-nesw * { cursor: nesw-resize !important; }
     </style>
 </head>
 <body>

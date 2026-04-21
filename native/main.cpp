@@ -93,8 +93,6 @@ static bool                              g_webviewReady = false;
 // Config
 static json g_cfg;
 static bool g_frameless    = false;
-static int  g_titleBarH    = 0;
-static int  g_borderSize   = 6;
 static int  g_effectType   = 0; // 0=none, 2=mica, 3=acrylic, 4=micaAlt
 static std::unordered_map<std::string, bool> g_permissions; // cmd -> allowed
 
@@ -134,7 +132,13 @@ static std::wstring g_logFile;
 static std::mutex   g_logMtx;
 
 // Background brush for frameless border area
-static HBRUSH g_bgBrush = nullptr;
+static HBRUSH   g_bgBrush = nullptr;
+static COLORREF g_bgClr   = 0;
+
+// Apply DWM visual attributes for frameless window (border, caption, backdrop).
+// Called at creation AND on WM_ACTIVATE / WM_NCACTIVATE because DWM re-asserts
+// system default border color on focus change in Win11.
+static void applyFramelessDwmAttrs();
 
 // Embedded assets (single-exe mode) — zero-copy: entries point directly into PE section
 #ifdef SINGLE_EXE
@@ -259,6 +263,34 @@ static void applyWindowEffect(HWND hwnd, int effectType) {
             auto clr = parseHexColor(hex);
             ctrl2->put_DefaultBackgroundColor({alpha, GetRValue(clr), GetGValue(clr), GetBValue(clr)});
         }
+    }
+}
+
+// DWM attribute reapply — idempotent, safe to call repeatedly. Uses g_bgClr
+// captured at window creation. Re-asserting on focus change prevents the
+// outer 1px DWM border from flashing to the system accent color on Win11.
+static void applyFramelessDwmAttrs() {
+    if (!g_frameless || !g_hwnd) return;
+
+    int lum = (GetRValue(g_bgClr)*299 + GetGValue(g_bgClr)*587 + GetBValue(g_bgClr)*114) / 1000;
+    BOOL darkMode = (lum < 128) ? TRUE : FALSE;
+
+    // DWMWA_USE_IMMERSIVE_DARK_MODE = 20
+    DwmSetWindowAttribute(g_hwnd, 20, &darkMode, sizeof(darkMode));
+    // DWMWA_BORDER_COLOR = 34 — concrete color matching bg is more reliable
+    // than DWMWA_COLOR_NONE which can flash on defocus on some installs.
+    DwmSetWindowAttribute(g_hwnd, 34, &g_bgClr, sizeof(g_bgClr));
+    // DWMWA_CAPTION_COLOR = 35
+    DwmSetWindowAttribute(g_hwnd, 35, &g_bgClr, sizeof(g_bgClr));
+
+    // Frame margins / backdrop
+    if (g_effectType >= 2) {
+        MARGINS m = {-1, -1, -1, -1};
+        DwmExtendFrameIntoClientArea(g_hwnd, &m);
+        DwmSetWindowAttribute(g_hwnd, 38, &g_effectType, sizeof(g_effectType));
+    } else {
+        MARGINS m = {0, 0, 0, 1};
+        DwmExtendFrameIntoClientArea(g_hwnd, &m);
     }
 }
 
@@ -417,13 +449,10 @@ static void reg_window() {
         auto hex = a.value("color", std::string{});
         if (hex.empty()) return false;
         COLORREF clr = parseHexColor(hex);
-        // Update DWM border + caption colors
+        // Update DWM border + caption colors (via shared helper)
         if (g_frameless) {
-            int lum = (GetRValue(clr)*299 + GetGValue(clr)*587 + GetBValue(clr)*114) / 1000;
-            BOOL dark = (lum < 128) ? TRUE : FALSE;
-            DwmSetWindowAttribute(g_hwnd, 20, &dark, sizeof(dark));
-            DwmSetWindowAttribute(g_hwnd, 34, &clr, sizeof(clr));
-            DwmSetWindowAttribute(g_hwnd, 35, &clr, sizeof(clr));
+            g_bgClr = clr;
+            applyFramelessDwmAttrs();
             if (g_bgBrush) DeleteObject(g_bgBrush);
             g_bgBrush = CreateSolidBrush(clr);
             InvalidateRect(g_hwnd, nullptr, TRUE);
@@ -673,6 +702,27 @@ static void reg_shell_app() {
     ipc_on("window.startDrag", [](const json&) -> json {
         ReleaseCapture();
         SendMessageW(g_hwnd, WM_NCLBUTTONDOWN, HTCAPTION, 0);
+        return true;
+    });
+    // Start a native resize drag. Frontend detects mouse near window edge and
+    // calls this on mousedown — Windows then drives the resize (correct cursors,
+    // snap, aero-shake). WebView2 fills the entire client area for zero visual
+    // chrome around the content.
+    ipc_on("window.startResize", [](const json& a) -> json {
+        if (!g_hwnd) return false;
+        auto edge = a.value("edge", std::string{});
+        WPARAM hit = 0;
+        if      (edge == "left")         hit = HTLEFT;
+        else if (edge == "right")        hit = HTRIGHT;
+        else if (edge == "top")          hit = HTTOP;
+        else if (edge == "bottom")       hit = HTBOTTOM;
+        else if (edge == "top-left")     hit = HTTOPLEFT;
+        else if (edge == "top-right")    hit = HTTOPRIGHT;
+        else if (edge == "bottom-left")  hit = HTBOTTOMLEFT;
+        else if (edge == "bottom-right") hit = HTBOTTOMRIGHT;
+        if (!hit) return false;
+        ReleaseCapture();
+        PostMessageW(g_hwnd, WM_NCLBUTTONDOWN, hit, 0);
         return true;
     });
     ipc_on("window.getConfig", [](const json&) -> json {
@@ -1725,14 +1775,6 @@ static void setupWebView(ICoreWebView2Controller* ctrl) {
     g_ctrl->get_CoreWebView2(&g_view);
 
     RECT b; GetClientRect(g_hwnd, &b);
-    if (g_frameless) {
-        WINDOWPLACEMENT wp{sizeof(wp)};
-        GetWindowPlacement(g_hwnd, &wp);
-        if (wp.showCmd != SW_MAXIMIZE) {
-            b.left += g_borderSize; b.top += g_borderSize;
-            b.right -= g_borderSize; b.bottom -= g_borderSize;
-        }
-    }
     g_ctrl->put_Bounds(b);
 
     // Background color from config (alpha=255 for opaque)
@@ -1942,7 +1984,15 @@ static LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM w, LPARAM l) {
         if (g_frameless) return 0;
         break;
     case WM_NCACTIVATE:
-        if (g_frameless) return TRUE;
+        if (g_frameless) {
+            // Re-assert DWM attrs so the outer 1px border doesn't flash to
+            // the system accent color on focus change.
+            applyFramelessDwmAttrs();
+            return TRUE; // prevents DefWindowProc from repainting NC area
+        }
+        break;
+    case WM_ACTIVATE:
+        if (g_frameless) applyFramelessDwmAttrs();
         break;
     case WM_ERASEBKGND:
         if (g_frameless && g_bgBrush) {
@@ -1966,14 +2016,6 @@ static LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM w, LPARAM l) {
     case WM_SIZE:
         if (g_ctrl) {
             RECT b; GetClientRect(h, &b);
-            if (g_frameless) {
-                WINDOWPLACEMENT wp{sizeof(wp)};
-                GetWindowPlacement(h, &wp);
-                if (wp.showCmd != SW_MAXIMIZE) {
-                    b.left += g_borderSize; b.top += g_borderSize;
-                    b.right -= g_borderSize; b.bottom -= g_borderSize;
-                }
-            }
             g_ctrl->put_Bounds(b);
         }
         if (w == SIZE_MAXIMIZED)      ipc_emit("window.maximized");
@@ -2106,33 +2148,6 @@ static LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM w, LPARAM l) {
         }
         break;
 
-    case WM_NCHITTEST: {
-        if (!g_frameless) break;
-        WINDOWPLACEMENT wp{sizeof(wp)};
-        GetWindowPlacement(h, &wp);
-        if (wp.showCmd == SW_MAXIMIZE) return HTCLIENT;
-        POINT pt = { GET_X_LPARAM(l), GET_Y_LPARAM(l) };
-        ScreenToClient(h, &pt);
-        RECT rc; GetClientRect(h, &rc);
-        int B = g_borderSize;
-        // Resize borders
-        if (pt.y < B) {
-            if (pt.x < B) return HTTOPLEFT;
-            if (pt.x > rc.right - B) return HTTOPRIGHT;
-            return HTTOP;
-        }
-        if (pt.y > rc.bottom - B) {
-            if (pt.x < B) return HTBOTTOMLEFT;
-            if (pt.x > rc.right - B) return HTBOTTOMRIGHT;
-            return HTBOTTOM;
-        }
-        if (pt.x < B) return HTLEFT;
-        if (pt.x > rc.right - B) return HTRIGHT;
-        if (g_titleBarH > 0 && pt.y < g_titleBarH && pt.x < rc.right - 140)
-            return HTCAPTION;
-        return HTCLIENT;
-    }
-
     case WM_GETMINMAXINFO: {
         auto mw = g_cfg.value("/window/minWidth"_json_pointer, 200);
         auto mh = g_cfg.value("/window/minHeight"_json_pointer, 150);
@@ -2188,8 +2203,6 @@ int WINAPI wWinMain(HINSTANCE hi, HINSTANCE, LPWSTR, int ns) {
     int  width     = winCfg.value("width", 1024);
     int  height    = winCfg.value("height", 768);
     g_frameless    = winCfg.value("frameless", false);
-    g_titleBarH    = winCfg.value("titleBarHeight", g_frameless ? 40 : 0);
-    g_borderSize   = winCfg.value("borderSize", 6);
     g_effectType   = parseEffectType(winCfg.value("effect", std::string{"none"}));
 
     // Security: load permissions
@@ -2243,31 +2256,8 @@ int WINAPI wWinMain(HINSTANCE hi, HINSTANCE, LPWSTR, int ns) {
 
     // DWM attributes for frameless
     if (g_frameless) {
-        // Auto-detect dark/light based on background luminance
-        int lum = (GetRValue(bgClr) * 299 + GetGValue(bgClr) * 587 + GetBValue(bgClr) * 114) / 1000;
-        BOOL darkMode = (lum < 128) ? TRUE : FALSE;
-
-        // DWMWA_USE_IMMERSIVE_DARK_MODE = 20
-        DwmSetWindowAttribute(g_hwnd, 20, &darkMode, sizeof(darkMode));
-
-        // Windows 11 (22000+): set border color to match background instead of
-        // DWMWA_COLOR_NONE, which can still flash on focus changes.
-        // DWMWA_BORDER_COLOR = 34
-        DwmSetWindowAttribute(g_hwnd, 34, &bgClr, sizeof(bgClr));
-
-        // DWMWA_CAPTION_COLOR = 35
-        DwmSetWindowAttribute(g_hwnd, 35, &bgClr, sizeof(bgClr));
-
-        // Extend frame: full glass for effects, 1px bottom for shadow only
-        if (g_effectType >= 2) {
-            MARGINS m = {-1, -1, -1, -1};
-            DwmExtendFrameIntoClientArea(g_hwnd, &m);
-            DwmSetWindowAttribute(g_hwnd, 38, &g_effectType, sizeof(g_effectType));
-        } else {
-            MARGINS m = {0, 0, 0, 1};
-            DwmExtendFrameIntoClientArea(g_hwnd, &m);
-        }
-
+        g_bgClr = bgClr;
+        applyFramelessDwmAttrs();
         g_bgBrush = CreateSolidBrush(bgClr);
     }
 

@@ -29,6 +29,52 @@ function log(text: string) {
         else await win.maximize();
     });
     document.getElementById('tb-close')!.addEventListener('click', () => win.close());
+
+    // ── Window edge resize (Tauri/Wails pattern) ──
+    // Detect mouse near window edge → set cursor class + invoke native resize
+    // on mousedown. Works with any window — WebView2 fills client area.
+    type Edge = 'left'|'right'|'top'|'bottom'|'top-left'|'top-right'|'bottom-left'|'bottom-right';
+    const EDGE = 6;
+    const classMap: Record<Edge, string> = {
+        'left': 'rz-ew', 'right': 'rz-ew',
+        'top': 'rz-ns', 'bottom': 'rz-ns',
+        'top-left': 'rz-nwse', 'bottom-right': 'rz-nwse',
+        'top-right': 'rz-nesw', 'bottom-left': 'rz-nesw',
+    };
+    let curEdge: Edge | null = null;
+
+    const detectEdge = (e: MouseEvent): Edge | null => {
+        const w = window.innerWidth, h = window.innerHeight;
+        const L = e.clientX < EDGE, R = e.clientX >= w - EDGE;
+        const T = e.clientY < EDGE, B = e.clientY >= h - EDGE;
+        if (T && L) return 'top-left';
+        if (T && R) return 'top-right';
+        if (B && L) return 'bottom-left';
+        if (B && R) return 'bottom-right';
+        if (L) return 'left';
+        if (R) return 'right';
+        if (T) return 'top';
+        if (B) return 'bottom';
+        return null;
+    };
+
+    document.addEventListener('mousemove', (e) => {
+        const edge = detectEdge(e);
+        if (edge === curEdge) return;
+        if (curEdge) document.body.classList.remove(classMap[curEdge]);
+        curEdge = edge;
+        if (edge) document.body.classList.add(classMap[edge]);
+    });
+
+    document.addEventListener('mousedown', (e) => {
+        if (e.button !== 0) return;
+        const edge = detectEdge(e);
+        if (edge) {
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            win.startResize(edge);
+        }
+    }, true); // capture so we beat titlebar drag and other handlers
 })();
 
 // ── Window ──────────────────────────────────

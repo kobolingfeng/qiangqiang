@@ -27,6 +27,10 @@ export interface MenuItem {
     checked?: boolean;
 }
 
+export type ResizeEdge =
+    | 'left' | 'right' | 'top' | 'bottom'
+    | 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right';
+
 export interface HttpResponse {
     status: number;
     headers: string;
@@ -55,6 +59,7 @@ export const win = {
     setOpacity:         (opacity: number) => invoke<boolean>('window.setOpacity', { opacity }),
     setProgress:        (value: number) => invoke<boolean>('window.setProgress', { value }),
     startDrag:          () => invoke<boolean>('window.startDrag'),
+    startResize:        (edge: ResizeEdge) => invoke<boolean>('window.startResize', { edge }),
     getConfig:      () => invoke<any>('window.getConfig'),
     isFrameless:    () => invoke<boolean>('window.isFrameless'),
     createChild: (opts: { title?: string; width?: number; height?: number; url?: string }) =>

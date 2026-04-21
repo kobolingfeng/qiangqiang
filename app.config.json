@@ -6,8 +6,6 @@
         "minWidth": 400,
         "minHeight": 300,
         "frameless": true,
-        "titleBarHeight": 40,
-        "borderSize": 6,
         "backgroundColor": "#1a1a2e",
         "resizable": true,
         "alwaysOnTop": false
