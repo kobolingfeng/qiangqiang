@@ -136,8 +136,9 @@ static HBRUSH   g_bgBrush = nullptr;
 static COLORREF g_bgClr   = 0;
 
 // Apply DWM visual attributes for frameless window (border, caption, backdrop).
-// Called at creation AND on WM_ACTIVATE / WM_NCACTIVATE because DWM re-asserts
-// system default border color on focus change in Win11.
+// Called at creation and by window.setBackgroundColor. Not called on focus
+// change — Wails doesn't do it either, and with WebView2 filling the full
+// client area the 1px DWM border is barely perceptible anyway.
 static void applyFramelessDwmAttrs();
 
 // Embedded assets (single-exe mode) — zero-copy: entries point directly into PE section
@@ -266,9 +267,8 @@ static void applyWindowEffect(HWND hwnd, int effectType) {
     }
 }
 
-// DWM attribute reapply — idempotent, safe to call repeatedly. Uses g_bgClr
-// captured at window creation. Re-asserting on focus change prevents the
-// outer 1px DWM border from flashing to the system accent color on Win11.
+// Set DWM visual attributes once. Uses g_bgClr captured at window creation.
+// Safe to call again if g_bgClr changes (e.g. window.setBackgroundColor).
 static void applyFramelessDwmAttrs() {
     if (!g_frameless || !g_hwnd) return;
 
@@ -1984,15 +1984,7 @@ static LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM w, LPARAM l) {
         if (g_frameless) return 0;
         break;
     case WM_NCACTIVATE:
-        if (g_frameless) {
-            // Re-assert DWM attrs so the outer 1px border doesn't flash to
-            // the system accent color on focus change.
-            applyFramelessDwmAttrs();
-            return TRUE; // prevents DefWindowProc from repainting NC area
-        }
-        break;
-    case WM_ACTIVATE:
-        if (g_frameless) applyFramelessDwmAttrs();
+        if (g_frameless) return TRUE; // prevents DefWindowProc from repainting NC area
         break;
     case WM_ERASEBKGND:
         if (g_frameless && g_bgBrush) {
