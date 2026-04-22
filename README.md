@@ -63,6 +63,7 @@ bun run build:single     # 编译单 exe（HTML/JS 嵌入资源段）
 
 ```bash
 bun run package  # 生成 release/强强-portable.zip
+bun run package:single  # 生成 release/强强-single.zip（仅包含单 exe）
 ```
 
 ## 使用 Vite / Vue / React

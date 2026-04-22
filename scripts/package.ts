@@ -6,11 +6,13 @@ import { join } from 'path';
 const root = join(import.meta.dir, '..');
 const dist = join(root, 'dist');
 const out  = join(root, 'release');
+const singleExe = process.argv.includes('--single-exe');
+const buildCommand = singleExe ? 'bun run build:single' : 'bun run build';
 
 // Ensure built
-if (!existsSync(join(dist, 'app.exe'))) {
+if (singleExe || !existsSync(join(dist, 'app.exe'))) {
     console.log('📦 Building first...');
-    execSync('bun run build', { cwd: root, stdio: 'inherit' });
+    execSync(buildCommand, { cwd: root, stdio: 'inherit' });
 }
 
 // Read config for name
@@ -21,16 +23,22 @@ try {
 } catch {}
 
 mkdirSync(out, { recursive: true });
-const zipName = `${name}-portable.zip`;
+const zipName = `${name}-${singleExe ? 'single' : 'portable'}.zip`;
 const zipPath = join(out, zipName);
 
 console.log(`📦 Packaging → release/${zipName}`);
 
-// Use PowerShell Compress-Archive
-execSync(
-    `powershell -NoProfile -Command "Compress-Archive -Path '${dist}\\*' -DestinationPath '${zipPath}' -Force"`,
-    { cwd: root, stdio: 'inherit' }
-);
+if (singleExe) {
+    execSync(
+        `powershell -NoProfile -Command "Compress-Archive -LiteralPath '${join(dist, 'app.exe')}' -DestinationPath '${zipPath}' -Force"`,
+        { cwd: root, stdio: 'inherit' }
+    );
+} else {
+    execSync(
+        `powershell -NoProfile -Command "Compress-Archive -Path '${dist}\\*' -DestinationPath '${zipPath}' -Force"`,
+        { cwd: root, stdio: 'inherit' }
+    );
+}
 
 const { size } = Bun.file(zipPath);
 console.log(`✅ ${zipName} (${(size / 1024).toFixed(0)} KB)`);

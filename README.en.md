@@ -59,6 +59,7 @@ bun run build    # Compiles to dist/
 
 ```bash
 bun run package  # Creates release/强强-portable.zip
+bun run package:single  # Creates release/强强-single.zip (single exe only)
 ```
 
 ## API Overview

@@ -1,6 +1,9 @@
 {
   "name": "qiangqiang",
   "version": "0.0.1",
+  "devDependencies": {
+    "@types/bun": "latest"
+  },
   "scripts": {
     "setup": "bun scripts/setup.ts",
     "dev": "bun scripts/dev.ts",
@@ -8,6 +11,7 @@
     "build:native": "bun scripts/build.ts --native-only",
     "build:frontend": "bun scripts/build.ts --frontend-only",
     "build:single": "bun scripts/build.ts --single-exe",
-    "package": "bun scripts/package.ts"
+    "package": "bun scripts/package.ts",
+    "package:single": "bun scripts/package.ts --single-exe"
   }
 }

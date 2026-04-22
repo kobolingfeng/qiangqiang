@@ -186,8 +186,19 @@ if (existsSync(rcFile)) {
         execSync(rcCmd, { cwd: ROOT, stdio: 'inherit' });
         linkRes = `"${resFile}"`;
     } catch {
+        if (singleExe) {
+            console.error('❌ Resource compilation failed.');
+            console.error('   Single-exe builds must embed the frontend into the exe.');
+            console.error('   Otherwise the app will only run while index.html/main.js are still beside dist\\app.exe.');
+            process.exit(1);
+        }
         console.warn('⚠️ Resource compilation failed, building without resources');
     }
+}
+
+if (singleExe && !linkRes) {
+    console.error('❌ Single-exe build aborted because no embedded resource was linked.');
+    process.exit(1);
 }
 
 // ── 4. Compile ────────────────────────────────────────

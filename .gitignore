@@ -12,3 +12,4 @@ native/_embedded.*
 *.lib
 *.res
 node_modules/
+.ai-switch/

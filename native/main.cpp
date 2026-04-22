@@ -28,6 +28,8 @@
 #include <WebView2.h>
 #include <WebView2EnvironmentOptions.h>
 #include <string>
+#include <vector>
+#include <algorithm>
 #include <functional>
 #include <unordered_map>
 #include <filesystem>
@@ -77,6 +79,38 @@ static std::wstring exe_dir() {
     GetModuleFileNameW(nullptr, p, MAX_PATH);
     PathRemoveFileSpecW(p);
     return p;
+}
+
+static bool file_exists(const std::wstring& path) {
+    std::error_code ec;
+    return fspath::is_regular_file(fspath::path(path), ec);
+}
+
+static std::vector<std::wstring> production_asset_dirs() {
+    std::vector<std::wstring> dirs;
+    auto push_unique = [&](const std::wstring& dir) {
+        if (!dir.empty() && std::find(dirs.begin(), dirs.end(), dir) == dirs.end())
+            dirs.push_back(dir);
+    };
+
+    auto dir = exe_dir();
+    push_unique(dir);
+    push_unique((fspath::path(dir) / "dist").wstring());
+
+    auto parent = fspath::path(dir).parent_path();
+    if (!parent.empty()) {
+        push_unique((parent / "dist").wstring());
+        push_unique(parent.wstring());
+    }
+    return dirs;
+}
+
+static std::wstring resolve_frontend_dir() {
+    for (const auto& dir : production_asset_dirs()) {
+        if (file_exists(dir + L"\\index.html"))
+            return dir;
+    }
+    return {};
 }
 
 // ================================================================
@@ -294,9 +328,9 @@ static void applyFramelessDwmAttrs() {
     }
 }
 
-static json loadConfig(const std::wstring& dir) {
-    for (auto& name : { L"\\app.config.json", L"\\..\\app.config.json" }) {
-        auto path = dir + name;
+static json loadConfig() {
+    for (const auto& dir : production_asset_dirs()) {
+        auto path = dir + L"\\app.config.json";
         std::ifstream f(path);
         if (f) { json j; f >> j; return j; }
     }
@@ -1909,7 +1943,16 @@ static void setupWebView(ICoreWebView2Controller* ctrl) {
         } else
 #endif
         {
-            auto dir = exe_dir();
+            auto dir = resolve_frontend_dir();
+            if (dir.empty()) {
+                MessageBoxW(
+                    g_hwnd,
+                    L"未找到前端资源（index.html）。\n普通构建请保留 dist 目录；如需单文件分发，请使用 bun run build:single 或 bun run package:single。",
+                    L"错误",
+                    MB_ICONERROR);
+                PostMessageW(g_hwnd, WM_CLOSE, 0, 0);
+                return;
+            }
             ComPtr<ICoreWebView2_3> v3;
             if (SUCCEEDED(g_view.As(&v3)))
                 v3->SetVirtualHostNameToFolderMapping(
@@ -2179,7 +2222,7 @@ int WINAPI wWinMain(HINSTANCE hi, HINSTANCE, LPWSTR, int ns) {
     LocalFree(argv);
 
     // Load config
-    g_cfg = loadConfig(exe_dir());
+    g_cfg = loadConfig();
 #ifdef SINGLE_EXE
     loadPak();
 #endif
