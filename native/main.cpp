@@ -2145,6 +2145,17 @@ static LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM w, LPARAM l) {
         auto mh = g_cfg.value("/window/minHeight"_json_pointer, 150);
         auto* mmi = reinterpret_cast<MINMAXINFO*>(l);
         mmi->ptMinTrackSize = { mw, mh };
+        if (g_frameless) {
+            HMONITOR mon = MonitorFromWindow(h, MONITOR_DEFAULTTONEAREST);
+            MONITORINFO mi{sizeof(mi)};
+            if (GetMonitorInfoW(mon, &mi)) {
+                mmi->ptMaxPosition.x = mi.rcWork.left - mi.rcMonitor.left;
+                mmi->ptMaxPosition.y = mi.rcWork.top - mi.rcMonitor.top;
+                mmi->ptMaxSize.x = mi.rcWork.right - mi.rcWork.left;
+                mmi->ptMaxSize.y = mi.rcWork.bottom - mi.rcWork.top;
+                mmi->ptMaxTrackSize = mmi->ptMaxSize;
+            }
+        }
         return 0;
     }
     }
