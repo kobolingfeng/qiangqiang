@@ -3,42 +3,45 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>强强</title>
+    <title>强强文件查看器</title>
     <style>
         :root {
             color-scheme: dark light;
             --bg: #1a1a2e;
             --titlebar-bg: #16162a;
-            --panel: #1e1e3a;
-            --panel-hover: #2a2a4e;
-            --output-bg: #12122a;
-            --border: #333;
-            --text: #eee;
-            --muted: #888;
-            --subtle: #555;
+            --surface: #1d1d36;
+            --surface-2: #232342;
+            --surface-hover: #2a2a4e;
+            --border: #333750;
+            --text: #eeeeee;
+            --muted: #9b9baa;
+            --subtle: #666678;
             --accent: #0078d4;
-            --output-text: #66cc66;
+            --accent-text: #ffffff;
+            --preview-bg: #111124;
+            --code-text: #d7e8ff;
+            --danger: #e81123;
         }
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
-            font-family: "Microsoft YaHei", system-ui, sans-serif;
-            background: var(--bg);
-            color: var(--text);
-            user-select: none;
+            height: 100vh;
+            overflow: hidden;
             display: flex;
             flex-direction: column;
-            height: 100vh;
+            background: var(--bg);
+            color: var(--text);
+            font-family: "Microsoft YaHei", system-ui, sans-serif;
+            user-select: none;
             transition: background 0.18s ease, color 0.18s ease;
         }
-        /* ── Custom titlebar ── */
         .titlebar {
-            display: none; /* shown via JS when frameless */
+            display: none;
             height: 40px;
             background: var(--titlebar-bg);
+            border-bottom: 1px solid var(--border);
             flex-shrink: 0;
             align-items: center;
             padding-left: 12px;
-            border-bottom: 1px solid var(--border);
             transition: background 0.18s ease, border-color 0.18s ease;
         }
         .titlebar.active { display: flex; }
@@ -60,63 +63,265 @@
             display: flex;
             align-items: center;
             justify-content: center;
-            transition: background 0.1s;
+            transition: background 0.12s, color 0.12s;
             padding: 0;
             border-radius: 0;
         }
-        .titlebar-btn:hover { background: rgba(255,255,255,0.08); color: #fff; }
-        .titlebar-btn.close:hover { background: #e81123; color: #fff; }
+        .titlebar-btn:hover { background: color-mix(in srgb, var(--text) 10%, transparent); color: var(--text); }
+        .titlebar-btn.close:hover { background: var(--danger); color: #fff; }
         .titlebar-btn svg { width: 10px; height: 10px; fill: currentColor; }
-        /* ── Content ── */
-        .content {
+        .app {
             flex: 1;
-            overflow-y: auto;
-            padding: 2rem;
+            min-height: 0;
+            display: grid;
+            grid-template-rows: auto 1fr auto;
         }
-        h1 { font-size: 2rem; margin-bottom: 0.25rem; }
-        .sub { color: var(--subtle); font-size: 0.8rem; margin-bottom: 1.5rem; }
-        .section { margin-bottom: 1.25rem; }
-        .section h2 { font-size: 0.85rem; color: var(--muted); margin-bottom: 0.5rem; text-transform: uppercase; letter-spacing: 0.05em; }
-        .actions { display: flex; gap: 0.4rem; flex-wrap: wrap; }
-        button {
-            padding: 0.4rem 1rem;
+        .toolbar {
+            display: grid;
+            grid-template-columns: auto minmax(180px, 1fr) auto;
+            gap: 10px;
+            align-items: center;
+            padding: 10px 12px;
+            border-bottom: 1px solid var(--border);
+            background: var(--surface);
+        }
+        .brand {
+            display: flex;
+            align-items: baseline;
+            gap: 10px;
+            min-width: 0;
+        }
+        .brand h1 {
+            font-size: 18px;
+            line-height: 1;
+            white-space: nowrap;
+        }
+        .brand span {
+            color: var(--subtle);
+            font-size: 12px;
+            white-space: nowrap;
+        }
+        .address {
+            height: 34px;
+            min-width: 0;
             border: 1px solid var(--border);
-            background: var(--panel);
+            background: var(--preview-bg);
             color: var(--text);
-            border-radius: 5px;
-            cursor: pointer;
-            font-size: 0.8rem;
-            transition: background 0.15s, border-color 0.15s, color 0.15s, transform 0.15s;
-        }
-        button:hover { background: var(--panel-hover); border-color: var(--accent); color: var(--text); }
-        button:active { transform: scale(0.97); }
-        #output {
-            margin-top: 1rem;
-            padding: 0.75rem 1rem;
-            background: var(--output-bg);
-            border: 1px solid var(--border);
             border-radius: 6px;
-            color: var(--output-text);
-            font-family: "Cascadia Code", Consolas, monospace;
-            font-size: 0.8rem;
-            min-height: 3em;
-            white-space: pre-wrap;
-            word-break: break-all;
-            max-height: 12em;
-            overflow-y: auto;
-            transition: background 0.18s ease, border-color 0.18s ease, color 0.18s ease;
+            padding: 0 10px;
+            font: 12px "Cascadia Code", Consolas, monospace;
+            outline: none;
         }
-        /* Resize cursors — applied via body.rz-* class, !important wins over per-element cursors */
+        .address:focus,
+        .search:focus {
+            border-color: var(--accent);
+            box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 22%, transparent);
+        }
+        .toolbar-actions,
+        .panel-actions {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            flex-wrap: nowrap;
+        }
+        button,
+        select,
+        .search {
+            height: 34px;
+            border: 1px solid var(--border);
+            background: var(--surface-2);
+            color: var(--text);
+            border-radius: 6px;
+            font-size: 13px;
+            outline: none;
+        }
+        button {
+            padding: 0 11px;
+            cursor: pointer;
+            transition: background 0.14s, border-color 0.14s, transform 0.14s;
+            white-space: nowrap;
+        }
+        button:hover:not(:disabled) {
+            background: var(--surface-hover);
+            border-color: var(--accent);
+        }
+        button:active:not(:disabled) { transform: translateY(1px); }
+        button:disabled {
+            opacity: 0.45;
+            cursor: default;
+        }
+        .primary {
+            background: var(--accent);
+            border-color: var(--accent);
+            color: var(--accent-text);
+        }
+        .primary:hover:not(:disabled) {
+            background: color-mix(in srgb, var(--accent) 86%, var(--text));
+        }
+        .main {
+            min-height: 0;
+            display: grid;
+            grid-template-columns: minmax(240px, 300px) minmax(360px, 1fr) minmax(230px, 280px);
+        }
+        .pane {
+            min-height: 0;
+            display: flex;
+            flex-direction: column;
+            border-right: 1px solid var(--border);
+            background: color-mix(in srgb, var(--surface) 88%, var(--bg));
+        }
+        .pane:last-child { border-right: 0; }
+        .pane-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+            padding: 10px 12px;
+            border-bottom: 1px solid var(--border);
+            min-height: 54px;
+        }
+        .pane-title {
+            min-width: 0;
+            font-size: 13px;
+            font-weight: 600;
+            color: var(--muted);
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+        }
+        .search {
+            width: 100%;
+            padding: 0 9px;
+        }
+        .file-list {
+            flex: 1;
+            min-height: 0;
+            overflow: auto;
+            padding: 6px;
+        }
+        .file-row {
+            width: 100%;
+            min-height: 38px;
+            display: grid;
+            grid-template-columns: 42px minmax(0, 1fr);
+            gap: 8px;
+            align-items: center;
+            border: 1px solid transparent;
+            border-radius: 6px;
+            background: transparent;
+            color: var(--text);
+            text-align: left;
+            padding: 4px 7px;
+        }
+        .file-row:hover {
+            background: var(--surface-hover);
+            border-color: var(--border);
+        }
+        .file-row.selected {
+            background: color-mix(in srgb, var(--accent) 25%, var(--surface));
+            border-color: var(--accent);
+        }
+        .badge {
+            width: 38px;
+            height: 24px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 5px;
+            background: color-mix(in srgb, var(--accent) 18%, var(--surface-2));
+            color: var(--accent);
+            font: 700 10px "Cascadia Code", Consolas, monospace;
+        }
+        .file-name {
+            min-width: 0;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            font-size: 13px;
+        }
+        .file-kind {
+            color: var(--subtle);
+            font-size: 11px;
+            margin-top: 2px;
+        }
+        .preview {
+            flex: 1;
+            min-height: 0;
+            overflow: auto;
+            background: var(--preview-bg);
+        }
+        .empty,
+        .unsupported,
+        .error {
+            height: 100%;
+            display: grid;
+            place-items: center;
+            padding: 28px;
+            color: var(--muted);
+            text-align: center;
+        }
+        .unsupported strong,
+        .error strong {
+            display: block;
+            color: var(--text);
+            margin-bottom: 8px;
+        }
+        .code {
+            margin: 0;
+            padding: 18px 22px;
+            white-space: pre;
+            user-select: text;
+            font: 13px/1.55 "Cascadia Code", Consolas, monospace;
+            color: var(--code-text);
+        }
+        .details {
+            flex: 1;
+            min-height: 0;
+            overflow: auto;
+            padding: 12px;
+        }
+        .kv {
+            display: grid;
+            gap: 5px;
+            padding: 10px 0;
+            border-bottom: 1px solid var(--border);
+        }
+        .kv dt {
+            font-size: 11px;
+            color: var(--subtle);
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+        }
+        .kv dd {
+            user-select: text;
+            color: var(--text);
+            font-size: 13px;
+            overflow-wrap: anywhere;
+        }
+        .statusbar {
+            display: flex;
+            justify-content: space-between;
+            gap: 10px;
+            padding: 7px 12px;
+            border-top: 1px solid var(--border);
+            background: var(--surface);
+            color: var(--muted);
+            font-size: 12px;
+        }
         body.rz-ew,   body.rz-ew   * { cursor: ew-resize   !important; }
         body.rz-ns,   body.rz-ns   * { cursor: ns-resize   !important; }
         body.rz-nwse, body.rz-nwse * { cursor: nwse-resize !important; }
         body.rz-nesw, body.rz-nesw * { cursor: nesw-resize !important; }
+        @media (max-width: 860px) {
+            .toolbar { grid-template-columns: 1fr; }
+            .main { grid-template-columns: 1fr; grid-template-rows: 220px minmax(280px, 1fr) 210px; }
+            .pane { border-right: 0; border-bottom: 1px solid var(--border); }
+            .pane:last-child { border-bottom: 0; }
+        }
     </style>
 </head>
 <body>
-    <!-- Custom titlebar (shown when frameless) -->
     <div class="titlebar" id="titlebar">
-        <span class="titlebar-title">强强</span>
+        <span class="titlebar-title">强强文件查看器</span>
         <div class="titlebar-controls">
             <button class="titlebar-btn" id="tb-min" title="最小化">
                 <svg viewBox="0 0 10 1"><rect width="10" height="1"/></svg>
@@ -130,46 +335,67 @@
         </div>
     </div>
 
-    <div class="content">
-    <h1>强强</h1>
-    <p class="sub">C++ Win32 · WebView2 · Bun · Vanilla TS — ultra-thin native shell</p>
+    <main class="app">
+        <section class="toolbar">
+            <div class="brand">
+                <h1>文件查看器</h1>
+                <span id="theme-pill">System</span>
+            </div>
+            <input class="address" id="address" spellcheck="false" placeholder="输入路径后回车">
+            <div class="toolbar-actions">
+                <button id="btn-up" title="上一级">上一级</button>
+                <button id="btn-home" title="主目录">主目录</button>
+                <button id="btn-open-folder" class="primary">打开文件夹</button>
+                <button id="btn-open-file">打开文件</button>
+            </div>
+        </section>
 
-    <div class="section">
-        <h2>Window</h2>
-        <div class="actions">
-            <button id="btn-title">修改标题</button>
-            <button id="btn-size">窗口大小</button>
-            <button id="btn-center">居中</button>
-            <button id="btn-top">置顶</button>
-            <button id="btn-min">最小化</button>
-            <button id="btn-max">最大化</button>
-        </div>
-    </div>
+        <section class="main">
+            <aside class="pane">
+                <div class="pane-header">
+                    <div class="pane-title">文件</div>
+                    <div class="panel-actions">
+                        <select id="sort">
+                            <option value="name">名称</option>
+                            <option value="kind">类型</option>
+                        </select>
+                        <button id="btn-refresh" title="刷新">刷新</button>
+                    </div>
+                </div>
+                <div class="pane-header">
+                    <input class="search" id="filter" placeholder="过滤当前目录">
+                </div>
+                <div class="file-list" id="file-list"></div>
+            </aside>
 
-    <div class="section">
-        <h2>Dialogs</h2>
-        <div class="actions">
-            <button id="btn-open">打开文件</button>
-            <button id="btn-save">保存文件</button>
-            <button id="btn-folder">选择文件夹</button>
-            <button id="btn-msg">消息框</button>
-            <button id="btn-confirm">确认框</button>
-        </div>
-    </div>
+            <section class="pane">
+                <div class="pane-header">
+                    <div class="pane-title" id="preview-title">预览</div>
+                    <div class="panel-actions">
+                        <input class="search" id="preview-search" placeholder="搜索文本">
+                        <button id="btn-open-external">外部打开</button>
+                    </div>
+                </div>
+                <div class="preview" id="preview">
+                    <div class="empty">选择一个文本文件或目录</div>
+                </div>
+            </section>
 
-    <div class="section">
-        <h2>System</h2>
-        <div class="actions">
-            <button id="btn-clip-read">读剪贴板</button>
-            <button id="btn-clip-write">写剪贴板</button>
-            <button id="btn-tray">创建托盘</button>
-            <button id="btn-tray-rm">移除托盘</button>
-            <button id="btn-datadir">数据目录</button>
-        </div>
-    </div>
+            <aside class="pane">
+                <div class="pane-header">
+                    <div class="pane-title">属性</div>
+                    <button id="btn-reveal">定位</button>
+                </div>
+                <dl class="details" id="details"></dl>
+            </aside>
+        </section>
 
-    <div id="output">Ready.</div>
-    </div>
+        <footer class="statusbar">
+            <span id="status-left">Ready</span>
+            <span id="status-right">0 项</span>
+        </footer>
+    </main>
+
     <script type="module" src="./main.ts"></script>
 </body>
 </html>

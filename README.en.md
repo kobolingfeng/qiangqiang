@@ -16,14 +16,17 @@
 
 Ultra-lightweight Windows desktop app framework. C++ Win32 + WebView2 + Bun + TypeScript.
 
-> **884KB** single exe. 88 native APIs. Zero runtime dependencies (WebView2 is built into Windows 10/11).
+> **884KB** single exe. 90 native APIs. Zero runtime dependencies (WebView2 is built into Windows 10/11).
 
 ## Features
 
 - **Tiny** — 884KB single exe with embedded HTML/JS/Config, no external files needed
 - **Fast build** — Single-file C++, incremental compile < 2s
-- **Full API** — 88 native commands + 15 events + full TypeScript types
+- **Full API** — 90 native commands + 15 events + full TypeScript types
 - **Frameless window** — DWM shadow + custom titlebar + native resize
+- **Native window animations** — Minimize, maximize, restore, show, and close use Win32/DWM transitions
+- **Windows 11 theme sync** — Follows system dark/light mode and accent color, including DWM border and frontend CSS variables
+- **File viewer example** — The default app is now a usable desktop file viewer with browsing, filtering, text preview, and metadata
 - **Hot reload** — `bun run dev` for instant frontend refresh
 - **Zero deps** — No Node.js, Electron, or Tauri needed
 - **Any frontend** — Use any framework: React / Vue / Svelte / Solid / vanilla TS — anything that outputs HTML/CSS/JS
@@ -58,9 +61,19 @@ bun run build    # Compiles to dist/
 ### Package
 
 ```bash
-bun run package  # Creates release/强强-portable.zip
-bun run package:single  # Creates release/强强-single.zip (single exe only)
+bun run package  # Creates release/强强文件查看器-portable.zip
+bun run package:single  # Creates release/强强文件查看器-single.zip (single exe only)
 ```
+
+## Built-In Example: File Viewer
+
+The default `src/` app is a working file viewer that demonstrates QiangQiang's window animations, Windows theme sync, and native file system APIs:
+
+- Directory and file list with filtering, sorting, parent navigation, and refresh
+- Text/code preview for common source, Markdown, JSON, log, and plain-text files
+- Metadata panel with path, type, size, and modified time
+- Native dialogs for opening files/folders, plus external open and Explorer reveal
+- Live Windows 11 dark/light mode and accent color sync
 
 ## API Overview
 
@@ -230,6 +243,9 @@ await devtools.open();
         "titleBarHeight": 40,
         "borderSize": 6,
         "backgroundColor": "#1a1a2e",
+        "followSystemTheme": true,
+        "lightBackgroundColor": "#f6f6f9",
+        "darkBackgroundColor": "#1a1a2e",
         "singleInstance": true
     },
     "dev": {
@@ -247,8 +263,8 @@ await devtools.open();
 │   └── app.ico         # App icon (replace to customize)
 ├── src/
 │   ├── ipc.ts          # IPC communication bridge
-│   ├── api.ts          # TypeScript wrappers for all 66 commands
-│   ├── main.ts         # Demo frontend
+│   ├── api.ts          # TypeScript wrappers for all 90 commands
+│   ├── main.ts         # File viewer example frontend
 │   └── index.html      # Entry page
 ├── scripts/
 │   ├── setup.ts        # Download dependencies
@@ -269,7 +285,7 @@ Response: { id: number, result: any } | { id: number, error: string }
 Event:    { event: string, data: any }
 ```
 
-## All Commands (66)
+## All Commands (90)
 
 | Category | Commands |
 |---|---|
@@ -286,7 +302,7 @@ Event:    { event: string, data: any }
 | **Notification** | `show` |
 | **Menu** | `popup` |
 | **HTTP** | `request` |
-| **OS** | `platform` `arch` `version` `hostname` `username` `locale` |
+| **OS** | `platform` `arch` `version` `hostname` `username` `locale` `isDarkMode` `theme` `accentColor` |
 | **Paths** | `home` `documents` `desktop` `downloads` `appData` `localAppData` `temp` |
 | **Watcher** | `start` `stop` |
 | **DevTools** | `open` `close` |

@@ -16,14 +16,17 @@
 
 超轻量 Windows 桌面应用框架。C++ Win32 + WebView2 + Bun + TypeScript。
 
-> 仅 **884KB** 单 exe，88 个原生 API，零运行时依赖（WebView2 已内置于 Windows 10/11）。
+> 仅 **884KB** 单 exe，90 个原生 API，零运行时依赖（WebView2 已内置于 Windows 10/11）。
 
 ## 特性
 
 - **极小体积** — 单 exe 884KB（含嵌入 HTML/JS/Config），无需任何外部文件
 - **极快编译** — 单文件 C++，增量编译 < 2s
-- **完整 API** — 88 个原生命令 + 15 个事件 + 完整 TypeScript 类型
+- **完整 API** — 90 个原生命令 + 15 个事件 + 完整 TypeScript 类型
 - **真无边框窗口** — Composition 模式 WebView2（和 Wails/Tauri 同级），零像素边框 + DWM 阴影
+- **原生窗口动画** — 最小化、最大化、还原、打开、关闭走 Win32/DWM 过渡动画
+- **Win11 主题联动** — 自动跟随系统深浅色和强调色，同步 DWM 边框与前端 CSS 变量
+- **文件查看器示例** — 默认示例已升级为桌面文件查看器，支持目录浏览、过滤、文本预览和属性面板
 - **热重载开发** — `bun run dev` 一键启动，支持 Vite HMR / 内置 Bun 热重载
 - **零依赖** — 不需要 Node.js、Electron、Tauri 等
 - **单 exe 分发** — `bun run build:single`，pak 打包 + 内存资源拦截，支持 Vite 多文件产物
@@ -62,9 +65,19 @@ bun run build:single     # 编译单 exe（HTML/JS 嵌入资源段）
 ### 打包
 
 ```bash
-bun run package  # 生成 release/强强-portable.zip
-bun run package:single  # 生成 release/强强-single.zip（仅包含单 exe）
+bun run package  # 生成 release/强强文件查看器-portable.zip
+bun run package:single  # 生成 release/强强文件查看器-single.zip（仅包含单 exe）
 ```
+
+## 内置示例：文件查看器
+
+当前 `src/` 默认实现了一个可直接运行的文件查看器应用，用来展示强强的窗口动画、系统主题联动和文件系统 API：
+
+- 左侧目录文件列表，支持过滤、排序、上一级和刷新
+- 中间文本/代码预览，支持常见源码、Markdown、JSON、日志等文本文件
+- 右侧属性面板，显示路径、类型、大小、修改时间
+- 支持系统对话框打开文件/文件夹、外部打开和资源管理器定位
+- 跟随 Windows 11 深浅色与强调色变化
 
 ## 使用 Vite / Vue / React
 
@@ -339,8 +352,8 @@ await devtools.open();
 │   └── app.ico         # 应用图标（替换此文件自定义图标）
 ├── src/
 │   ├── ipc.ts          # IPC 通信桥
-│   ├── api.ts          # 全部 80 个命令的 TypeScript 类型封装
-│   ├── main.ts         # 示例前端
+│   ├── api.ts          # 全部 90 个命令的 TypeScript 类型封装
+│   ├── main.ts         # 文件查看器示例前端
 │   └── index.html      # 入口页面
 ├── scripts/
 │   ├── setup.ts        # 下载依赖

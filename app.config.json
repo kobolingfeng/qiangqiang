@@ -1,8 +1,8 @@
 {
     "window": {
-        "title": "强强",
-        "width": 1024,
-        "height": 768,
+        "title": "强强文件查看器",
+        "width": 1180,
+        "height": 760,
         "minWidth": 400,
         "minHeight": 300,
         "frameless": true,
