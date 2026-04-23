@@ -7,6 +7,9 @@
         "minHeight": 300,
         "frameless": true,
         "backgroundColor": "#1a1a2e",
+        "followSystemTheme": true,
+        "lightBackgroundColor": "#f6f6f9",
+        "darkBackgroundColor": "#1a1a2e",
         "resizable": true,
         "alwaysOnTop": false
     },

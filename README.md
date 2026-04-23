@@ -301,6 +301,9 @@ await devtools.open();
         "titleBarHeight": 40,
         "borderSize": 6,
         "backgroundColor": "#1a1a2e",
+        "followSystemTheme": true,
+        "lightBackgroundColor": "#f6f6f9",
+        "darkBackgroundColor": "#1a1a2e",
         "singleInstance": true,
         "splash": true
     },
@@ -320,7 +323,9 @@ await devtools.open();
 |---|---|
 | `frameless` | 启用无边框 Composition 模式（WebView2 填满窗口，零边框） |
 | `borderSize` | 窗口边缘 resize 手柄的 hit-test 宽度（像素） |
-| `backgroundColor` | 窗口背景色，自动同步 DWM 暗色/亮色模式 |
+| `backgroundColor` | 窗口默认背景色 |
+| `followSystemTheme` | 跟随 Windows 主题深浅色和强调色变化 |
+| `lightBackgroundColor` / `darkBackgroundColor` | 跟随系统主题时的亮色/暗色窗口背景 |
 | `dev.command` | 自定义开发服务器命令（Vite、Webpack 等），不设则用内置 Bun |
 | `build.command` | 自定义构建命令，不设则用内置 Bun |
 | `window.effect` | 窗口特效：`"none"` `"mica"` `"acrylic"` `"micaAlt"`（Win11） |
@@ -374,7 +379,7 @@ await devtools.open();
 | **通知** | `notification.show` | 系统通知 |
 | **菜单** | `menu.popup` | 右键菜单 |
 | **HTTP** | `http.request` | 原生 HTTP (绕过 CORS) |
-| **OS** | `os.platform` `os.arch` `os.version` `os.hostname` `os.username` `os.locale` `os.isDarkMode` | 系统信息 |
+| **OS** | `os.platform` `os.arch` `os.version` `os.hostname` `os.username` `os.locale` `os.isDarkMode` `os.theme` `os.accentColor` | 系统信息 |
 | **路径** | `path.home` `path.documents` `path.desktop` `path.downloads` `path.appData` `path.localAppData` `path.temp` | 特殊目录 |
 | **文件监听** | `watcher.start` `watcher.stop` | 文件系统监听 |
 | **DevTools** | `devtools.open` `devtools.close` | 开发者工具 |
@@ -452,6 +457,13 @@ import { os, win } from './api';
 
 // 检测系统暗色模式
 const dark = await os.isDarkMode();
+
+// 读取并监听 Windows 主题/强调色
+const theme = await os.theme();
+os.onThemeChanged((theme) => {
+    document.documentElement.style.setProperty('--accent', theme.accentColor);
+    win.setBackgroundColor(theme.backgroundColor);
+});
 
 // 窗口透明度 (0.0 ~ 1.0)
 await win.setOpacity(0.9);

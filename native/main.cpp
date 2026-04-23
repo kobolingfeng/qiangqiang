@@ -39,6 +39,7 @@
 #include <winhttp.h>
 #include <mutex>
 #include <atomic>
+#include <cstdio>
 #pragma comment(lib, "shlwapi.lib")
 #pragma comment(lib, "shell32.lib")
 #pragma comment(lib, "ole32.lib")
@@ -174,6 +175,14 @@ static COLORREF g_bgClr   = 0;
 // change — Wails doesn't do it either, and with WebView2 filling the full
 // client area the 1px DWM border is barely perceptible anyway.
 static void applyFramelessDwmAttrs();
+static bool configureAppHost(ICoreWebView2* view);
+static void enableWindowTransitions(HWND hwnd);
+static void showWindowAnimated(HWND hwnd, int showCmd, bool activate = true);
+static void hideWindowAnimated(HWND hwnd);
+static bool systemUsesDarkMode();
+static COLORREF currentWindowBackgroundColor();
+static json systemThemeInfo();
+static void applyNativeTheme();
 
 // Embedded assets (single-exe mode) — zero-copy: entries point directly into PE section
 #ifdef SINGLE_EXE
@@ -294,8 +303,7 @@ static void applyWindowEffect(HWND hwnd, int effectType) {
         ComPtr<ICoreWebView2Controller2> ctrl2;
         if (SUCCEEDED(g_ctrl.As(&ctrl2))) {
             BYTE alpha = (effectType >= 2) ? 0 : 255;
-            auto hex = g_cfg.value("/window/backgroundColor"_json_pointer, std::string{"#1a1a2e"});
-            auto clr = parseHexColor(hex);
+            auto clr = currentWindowBackgroundColor();
             ctrl2->put_DefaultBackgroundColor({alpha, GetRValue(clr), GetGValue(clr), GetBValue(clr)});
         }
     }
@@ -396,6 +404,137 @@ static void ipc_dispatch(LPCWSTR raw) {
     } catch (...) {}
 }
 
+static bool windowAnimationsEnabled() {
+    ANIMATIONINFO ai{sizeof(ai)};
+    if (SystemParametersInfoW(SPI_GETANIMATION, sizeof(ai), &ai, 0))
+        return ai.iMinAnimate != 0;
+    return true;
+}
+
+static void enableWindowTransitions(HWND hwnd) {
+    BOOL disabled = FALSE;
+    DwmSetWindowAttribute(hwnd, 3, &disabled, sizeof(disabled)); // DWMWA_TRANSITIONS_FORCEDISABLED
+}
+
+static void showWindowAnimated(HWND hwnd, int showCmd, bool activate) {
+    if (!hwnd) return;
+
+    if (showCmd == SW_MINIMIZE || showCmd == SW_MAXIMIZE || showCmd == SW_RESTORE || IsWindowVisible(hwnd)) {
+        ShowWindow(hwnd, showCmd);
+    } else if (windowAnimationsEnabled()) {
+        DWORD flags = AW_BLEND | (activate ? AW_ACTIVATE : 0);
+        if (!AnimateWindow(hwnd, 120, flags))
+            ShowWindow(hwnd, showCmd);
+    } else {
+        ShowWindow(hwnd, showCmd);
+    }
+
+    if (activate)
+        SetForegroundWindow(hwnd);
+}
+
+static void hideWindowAnimated(HWND hwnd) {
+    if (!hwnd) return;
+
+    if (IsWindowVisible(hwnd) && windowAnimationsEnabled()) {
+        if (AnimateWindow(hwnd, 100, AW_HIDE | AW_BLEND))
+            return;
+    }
+    ShowWindow(hwnd, SW_HIDE);
+}
+
+static bool followsSystemTheme() {
+    return g_cfg.value("/window/followSystemTheme"_json_pointer, false);
+}
+
+static bool systemUsesDarkMode() {
+    HKEY hKey;
+    if (RegOpenKeyExW(HKEY_CURRENT_USER,
+        L"Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize",
+        0, KEY_READ, &hKey) != ERROR_SUCCESS) return true;
+    DWORD val = 0, sz = sizeof(val);
+    if (RegQueryValueExW(hKey, L"AppsUseLightTheme", nullptr, nullptr, (BYTE*)&val, &sz) != ERROR_SUCCESS)
+        val = 0;
+    RegCloseKey(hKey);
+    return val == 0; // 0 = dark mode
+}
+
+static std::string colorToHex(COLORREF clr) {
+    char buf[8];
+    snprintf(buf, sizeof(buf), "#%02X%02X%02X", GetRValue(clr), GetGValue(clr), GetBValue(clr));
+    return buf;
+}
+
+static COLORREF systemAccentColor() {
+    DWORD color = 0;
+    BOOL opaque = FALSE;
+    if (SUCCEEDED(DwmGetColorizationColor(&color, &opaque))) {
+        return RGB((color >> 16) & 0xff, (color >> 8) & 0xff, color & 0xff);
+    }
+
+    HKEY hKey;
+    if (RegOpenKeyExW(HKEY_CURRENT_USER, L"Software\\Microsoft\\Windows\\DWM",
+        0, KEY_READ, &hKey) == ERROR_SUCCESS) {
+        DWORD sz = sizeof(color);
+        if (RegQueryValueExW(hKey, L"ColorizationColor", nullptr, nullptr, (BYTE*)&color, &sz) == ERROR_SUCCESS) {
+            RegCloseKey(hKey);
+            return RGB((color >> 16) & 0xff, (color >> 8) & 0xff, color & 0xff);
+        }
+        RegCloseKey(hKey);
+    }
+    return RGB(0, 120, 212);
+}
+
+static COLORREF currentWindowBackgroundColor() {
+    auto winCfg = g_cfg.value("window", json::object());
+    if (followsSystemTheme()) {
+        auto key = systemUsesDarkMode() ? "darkBackgroundColor" : "lightBackgroundColor";
+        auto fallback = systemUsesDarkMode()
+            ? winCfg.value("backgroundColor", std::string{"#1a1a2e"})
+            : std::string{"#f6f6f9"};
+        return parseHexColor(winCfg.value(key, fallback));
+    }
+    return parseHexColor(winCfg.value("backgroundColor", std::string{"#1a1a2e"}));
+}
+
+static json systemThemeInfo() {
+    bool dark = systemUsesDarkMode();
+    COLORREF bg = currentWindowBackgroundColor();
+    COLORREF fg = dark ? RGB(238, 238, 238) : RGB(32, 32, 36);
+    return {
+        {"dark", dark},
+        {"accentColor", colorToHex(systemAccentColor())},
+        {"backgroundColor", colorToHex(bg)},
+        {"foregroundColor", colorToHex(fg)},
+    };
+}
+
+static void applyNativeTheme() {
+    if (!g_hwnd || !followsSystemTheme()) return;
+
+    g_bgClr = currentWindowBackgroundColor();
+    BOOL darkMode = systemUsesDarkMode() ? TRUE : FALSE;
+    DwmSetWindowAttribute(g_hwnd, 20, &darkMode, sizeof(darkMode));
+
+    COLORREF border = systemAccentColor();
+    DwmSetWindowAttribute(g_hwnd, 34, &border, sizeof(border));
+    DwmSetWindowAttribute(g_hwnd, 35, &g_bgClr, sizeof(g_bgClr));
+
+    if (g_bgBrush) DeleteObject(g_bgBrush);
+    g_bgBrush = CreateSolidBrush(g_bgClr);
+    InvalidateRect(g_hwnd, nullptr, TRUE);
+
+    if (g_ctrl) {
+        ComPtr<ICoreWebView2Controller2> ctrl2;
+        if (SUCCEEDED(g_ctrl.As(&ctrl2))) {
+            BYTE alpha = (g_effectType >= 2) ? 0 : 255;
+            ctrl2->put_DefaultBackgroundColor({
+                alpha, GetRValue(g_bgClr), GetGValue(g_bgClr), GetBValue(g_bgClr)
+            });
+        }
+    }
+}
+
 // ================================================================
 //  Commands: Window
 // ================================================================
@@ -406,27 +545,38 @@ static void reg_window() {
         return true;
     });
     ipc_on("window.minimize", [](const json&) -> json {
-        ShowWindow(g_hwnd, SW_MINIMIZE); return true;
+        PostMessageW(g_hwnd, WM_SYSCOMMAND, SC_MINIMIZE, 0);
+        return true;
     });
     ipc_on("window.maximize", [](const json&) -> json {
         WINDOWPLACEMENT wp{sizeof(wp)};
         GetWindowPlacement(g_hwnd, &wp);
-        ShowWindow(g_hwnd, wp.showCmd == SW_MAXIMIZE ? SW_RESTORE : SW_MAXIMIZE);
+        if (!IsWindowVisible(g_hwnd)) {
+            showWindowAnimated(g_hwnd, SW_MAXIMIZE);
+            return true;
+        }
+        PostMessageW(g_hwnd, WM_SYSCOMMAND, wp.showCmd == SW_MAXIMIZE ? SC_RESTORE : SC_MAXIMIZE, 0);
         return true;
     });
     ipc_on("window.restore", [](const json&) -> json {
-        ShowWindow(g_hwnd, SW_RESTORE); return true;
+        if (!IsWindowVisible(g_hwnd)) {
+            showWindowAnimated(g_hwnd, SW_RESTORE);
+            return true;
+        }
+        PostMessageW(g_hwnd, WM_SYSCOMMAND, SC_RESTORE, 0);
+        return true;
     });
     ipc_on("window.close", [](const json&) -> json {
-        PostMessageW(g_hwnd, WM_CLOSE, 0, 0); return true;
+        PostMessageW(g_hwnd, WM_SYSCOMMAND, SC_CLOSE, 0);
+        return true;
     });
     ipc_on("window.show", [](const json&) -> json {
-        ShowWindow(g_hwnd, SW_SHOW);
-        SetForegroundWindow(g_hwnd);
+        showWindowAnimated(g_hwnd, IsIconic(g_hwnd) ? SW_RESTORE : SW_SHOW);
         return true;
     });
     ipc_on("window.hide", [](const json&) -> json {
-        ShowWindow(g_hwnd, SW_HIDE); return true;
+        hideWindowAnimated(g_hwnd);
+        return true;
     });
     ipc_on("window.size", [](const json&) -> json {
         RECT r; GetClientRect(g_hwnd, &r);
@@ -642,7 +792,9 @@ static void reg_fs() {
     });
     ipc_on("fs.remove", [](const json& a) -> json {
         auto path = a.value("path", std::string{});
-        if (path.empty() || path == "/" || path == "\\" || (path.size() <= 3 && path[1] == ':'))
+        bool driveRoot = path.size() >= 2 && path[1] == ':' &&
+            (path.size() == 2 || (path.size() == 3 && (path[2] == '\\' || path[2] == '/')));
+        if (path.empty() || path == "/" || path == "\\" || driveRoot)
             throw std::runtime_error("Refusing to remove root/drive path");
         fspath::remove_all(U2W(path));
         return true;
@@ -890,6 +1042,28 @@ static void reg_menu() {
 //  Commands: HTTP client
 // ================================================================
 
+static bool crackHttpUrl(const std::string& url, URL_COMPONENTS& uc,
+                         wchar_t (&host)[256], wchar_t (&path)[2048],
+                         wchar_t (&extra)[2048], std::wstring& objectPath) {
+    auto wUrl = U2W(url);
+    ZeroMemory(&uc, sizeof(uc));
+    uc.dwStructSize = sizeof(uc);
+    uc.lpszHostName = host;  uc.dwHostNameLength = 256;
+    uc.lpszUrlPath = path;   uc.dwUrlPathLength = 2048;
+    uc.lpszExtraInfo = extra; uc.dwExtraInfoLength = 2048;
+    if (!WinHttpCrackUrl(wUrl.c_str(), 0, 0, &uc))
+        return false;
+
+    objectPath.assign(path, uc.dwUrlPathLength);
+    objectPath.append(extra, uc.dwExtraInfoLength);
+    auto fragment = objectPath.find(L'#');
+    if (fragment != std::wstring::npos)
+        objectPath.resize(fragment);
+    if (objectPath.empty())
+        objectPath = L"/";
+    return true;
+}
+
 static void reg_http() {
     ipc_on("http.request", [](const json& a) -> json {
         auto url    = a.value("url", std::string{});
@@ -900,12 +1074,10 @@ static void reg_http() {
         if (url.empty()) throw std::runtime_error("url is required");
 
         // Parse URL
-        auto wUrl = U2W(url);
-        URL_COMPONENTS uc{sizeof(uc)};
-        wchar_t host[256]{}, path[2048]{};
-        uc.lpszHostName  = host;   uc.dwHostNameLength  = 256;
-        uc.lpszUrlPath   = path;   uc.dwUrlPathLength   = 2048;
-        if (!WinHttpCrackUrl(wUrl.c_str(), 0, 0, &uc))
+        URL_COMPONENTS uc;
+        wchar_t host[256]{}, path[2048]{}, extra[2048]{};
+        std::wstring objectPath;
+        if (!crackHttpUrl(url, uc, host, path, extra, objectPath))
             throw std::runtime_error("Invalid URL");
 
         bool https = (uc.nScheme == INTERNET_SCHEME_HTTPS);
@@ -917,7 +1089,7 @@ static void reg_http() {
         if (!hConnect) { WinHttpCloseHandle(hSession); throw std::runtime_error("WinHttpConnect failed"); }
 
         auto wMethod = U2W(method);
-        HINTERNET hRequest = WinHttpOpenRequest(hConnect, wMethod.c_str(), path,
+        HINTERNET hRequest = WinHttpOpenRequest(hConnect, wMethod.c_str(), objectPath.c_str(),
                                                  nullptr, WINHTTP_NO_REFERER,
                                                  WINHTTP_DEFAULT_ACCEPT_TYPES,
                                                  https ? WINHTTP_FLAG_SECURE : 0);
@@ -1026,6 +1198,12 @@ static void reg_os() {
         wchar_t buf[85]; GetUserDefaultLocaleName(buf, 85);
         return W2U(buf);
     });
+    ipc_on("os.theme", [](const json&) -> json {
+        return systemThemeInfo();
+    });
+    ipc_on("os.accentColor", [](const json&) -> json {
+        return colorToHex(systemAccentColor());
+    });
 
     // Special folders
     ipc_on("path.home", [](const json&) -> json {
@@ -1092,6 +1270,35 @@ static DWORD WINAPI watchThread(LPVOID param) {
     return 0;
 }
 
+static bool stopWatcher(FileWatcher* w, DWORD timeoutMs = 3000) {
+    if (!w) return true;
+    w->active = false;
+
+    if (w->hThread)
+        CancelSynchronousIo(w->hThread);
+    if (w->hDir && w->hDir != INVALID_HANDLE_VALUE)
+        CancelIoEx(w->hDir, nullptr);
+
+    DWORD wait = w->hThread ? WaitForSingleObject(w->hThread, timeoutMs) : WAIT_OBJECT_0;
+    if (wait == WAIT_TIMEOUT && w->hDir && w->hDir != INVALID_HANDLE_VALUE) {
+        CloseHandle(w->hDir);
+        w->hDir = INVALID_HANDLE_VALUE;
+        wait = w->hThread ? WaitForSingleObject(w->hThread, timeoutMs) : WAIT_OBJECT_0;
+    }
+    if (wait == WAIT_TIMEOUT)
+        return false;
+
+    if (w->hThread) {
+        CloseHandle(w->hThread);
+        w->hThread = nullptr;
+    }
+    if (w->hDir && w->hDir != INVALID_HANDLE_VALUE) {
+        CloseHandle(w->hDir);
+        w->hDir = INVALID_HANDLE_VALUE;
+    }
+    return true;
+}
+
 static void reg_watcher() {
     ipc_on("watcher.start", [](const json& a) -> json {
         auto path = a.value("path", std::string{});
@@ -1114,11 +1321,8 @@ static void reg_watcher() {
         auto it = g_watchers.find(id);
         if (it == g_watchers.end()) return false;
         auto* w = it->second;
-        w->active = false;
-        CancelIoEx(w->hDir, nullptr);
-        WaitForSingleObject(w->hThread, 1000);
-        CloseHandle(w->hThread);
-        CloseHandle(w->hDir);
+        if (!stopWatcher(w))
+            return false;
         delete w;
         g_watchers.erase(it);
         return true;
@@ -1402,20 +1606,24 @@ static void reg_log() {
 // ================================================================
 
 static json httpGet(const std::string& url) {
-    auto wUrl = U2W(url);
-    URL_COMPONENTS uc{sizeof(uc)};
-    wchar_t host[256]{}, path[2048]{};
-    uc.lpszHostName = host; uc.dwHostNameLength = 256;
-    uc.lpszUrlPath = path; uc.dwUrlPathLength = 2048;
-    if (!WinHttpCrackUrl(wUrl.c_str(), 0, 0, &uc))
+    URL_COMPONENTS uc;
+    wchar_t host[256]{}, path[2048]{}, extra[2048]{};
+    std::wstring objectPath;
+    if (!crackHttpUrl(url, uc, host, path, extra, objectPath))
         throw std::runtime_error("Invalid URL");
     bool https = (uc.nScheme == INTERNET_SCHEME_HTTPS);
     HINTERNET hSession = WinHttpOpen(L"QQ/1.0", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
         WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
     if (!hSession) throw std::runtime_error("WinHttpOpen failed");
     HINTERNET hConnect = WinHttpConnect(hSession, host, uc.nPort, 0);
-    HINTERNET hRequest = WinHttpOpenRequest(hConnect, L"GET", path, nullptr,
+    if (!hConnect) { WinHttpCloseHandle(hSession); throw std::runtime_error("WinHttpConnect failed"); }
+    HINTERNET hRequest = WinHttpOpenRequest(hConnect, L"GET", objectPath.c_str(), nullptr,
         WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, https ? WINHTTP_FLAG_SECURE : 0);
+    if (!hRequest) {
+        WinHttpCloseHandle(hConnect);
+        WinHttpCloseHandle(hSession);
+        throw std::runtime_error("WinHttpOpenRequest failed");
+    }
     if (!WinHttpSendRequest(hRequest, WINHTTP_NO_ADDITIONAL_HEADERS, 0,
         WINHTTP_NO_REQUEST_DATA, 0, 0, 0) || !WinHttpReceiveResponse(hRequest, nullptr)) {
         WinHttpCloseHandle(hRequest); WinHttpCloseHandle(hConnect); WinHttpCloseHandle(hSession);
@@ -1433,24 +1641,29 @@ static json httpGet(const std::string& url) {
 }
 
 static bool downloadFile(const std::string& url, const std::wstring& dest) {
-    auto wUrl = U2W(url);
-    URL_COMPONENTS uc{sizeof(uc)};
-    wchar_t host[256]{}, path[2048]{};
-    uc.lpszHostName = host; uc.dwHostNameLength = 256;
-    uc.lpszUrlPath = path; uc.dwUrlPathLength = 2048;
-    if (!WinHttpCrackUrl(wUrl.c_str(), 0, 0, &uc)) return false;
+    URL_COMPONENTS uc;
+    wchar_t host[256]{}, path[2048]{}, extra[2048]{};
+    std::wstring objectPath;
+    if (!crackHttpUrl(url, uc, host, path, extra, objectPath)) return false;
     bool https = (uc.nScheme == INTERNET_SCHEME_HTTPS);
     HINTERNET hS = WinHttpOpen(L"QQ/1.0", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
         WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
+    if (!hS) return false;
     HINTERNET hC = WinHttpConnect(hS, host, uc.nPort, 0);
-    HINTERNET hR = WinHttpOpenRequest(hC, L"GET", path, nullptr,
+    if (!hC) { WinHttpCloseHandle(hS); return false; }
+    HINTERNET hR = WinHttpOpenRequest(hC, L"GET", objectPath.c_str(), nullptr,
         WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, https ? WINHTTP_FLAG_SECURE : 0);
+    if (!hR) { WinHttpCloseHandle(hC); WinHttpCloseHandle(hS); return false; }
     if (!WinHttpSendRequest(hR, WINHTTP_NO_ADDITIONAL_HEADERS, 0,
         WINHTTP_NO_REQUEST_DATA, 0, 0, 0) || !WinHttpReceiveResponse(hR, nullptr)) {
         WinHttpCloseHandle(hR); WinHttpCloseHandle(hC); WinHttpCloseHandle(hS);
         return false;
     }
     std::ofstream out(dest, std::ios::binary);
+    if (!out) {
+        WinHttpCloseHandle(hR); WinHttpCloseHandle(hC); WinHttpCloseHandle(hS);
+        return false;
+    }
     DWORD avail, rd;
     while (WinHttpQueryDataAvailable(hR, &avail) && avail > 0) {
         std::string chunk(avail, 0);
@@ -1520,6 +1733,7 @@ static LRESULT CALLBACK ChildWndProc(HWND h, UINT m, WPARAM w, LPARAM l) {
                 break;
             }
         }
+        hideWindowAnimated(h);
         DestroyWindow(h);
         return 0;
     }
@@ -1560,7 +1774,8 @@ static void reg_multiwindow() {
             WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
             CW_USEDEFAULT, CW_USEDEFAULT, w, h,
             g_hwnd, nullptr, GetModuleHandleW(nullptr), nullptr);
-        ShowWindow(child, SW_SHOW);
+        enableWindowTransitions(child);
+        showWindowAnimated(child, SW_SHOW);
 
         auto* cw = new ChildWindow{id, child, nullptr, nullptr};
         g_children[id] = cw;
@@ -1576,12 +1791,13 @@ static void reg_multiwindow() {
                 ctrl->get_CoreWebView2(&cw->view);
                 RECT b; GetClientRect(cw->hwnd, &b);
                 ctrl->put_Bounds(b);
+                configureAppHost(cw->view.Get());
 
                 // Navigate
                 if (!url.empty()) {
                     cw->view->Navigate(U2W(url).c_str());
                 } else {
-                    cw->view->Navigate(L"http://app.localhost/index.html");
+                    cw->view->Navigate(L"https://app.localhost/index.html");
                 }
                 return S_OK;
             }).Get());
@@ -1612,14 +1828,7 @@ static void reg_multiwindow() {
 static void reg_extras() {
     // System theme detection
     ipc_on("os.isDarkMode", [](const json&) -> json {
-        HKEY hKey;
-        if (RegOpenKeyExW(HKEY_CURRENT_USER,
-            L"Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize",
-            0, KEY_READ, &hKey) != ERROR_SUCCESS) return false;
-        DWORD val = 1, sz = sizeof(val);
-        RegQueryValueExW(hKey, L"AppsUseLightTheme", nullptr, nullptr, (BYTE*)&val, &sz);
-        RegCloseKey(hKey);
-        return val == 0; // 0 = dark mode
+        return systemUsesDarkMode();
     });
 
     // Window opacity
@@ -1738,10 +1947,8 @@ static LRESULT CALLBACK SplashProc(HWND h, UINT m, WPARAM w, LPARAM l) {
         HDC hdc = BeginPaint(h, &ps);
         RECT rc; GetClientRect(h, &rc);
         // Background
-        auto bg = g_cfg.value("/window/backgroundColor"_json_pointer, std::string{"#1a1a2e"});
-        int r=26,g=26,b=46;
-        if (bg.size()>=7) { r=std::stoi(bg.substr(1,2),0,16); g=std::stoi(bg.substr(3,2),0,16); b=std::stoi(bg.substr(5,2),0,16); }
-        HBRUSH brush = CreateSolidBrush(RGB(r,g,b));
+        auto bg = currentWindowBackgroundColor();
+        HBRUSH brush = CreateSolidBrush(bg);
         FillRect(hdc, &rc, brush);
         DeleteObject(brush);
         // Title text
@@ -1804,6 +2011,78 @@ static void closeSplash() {
 //  WebView2 initialization
 // ================================================================
 
+static bool configureAppHost(ICoreWebView2* view) {
+    if (!view) return false;
+
+#ifdef SINGLE_EXE
+    if (!g_pakEntries.empty()) {
+        view->AddWebResourceRequestedFilter(
+            L"http://app.localhost/*", COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL);
+        view->AddWebResourceRequestedFilter(
+            L"https://app.localhost/*", COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL);
+        view->AddWebResourceRequestedFilter(
+            L"http://app.local/*", COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL);
+        view->AddWebResourceRequestedFilter(
+            L"https://app.local/*", COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL);
+        view->add_WebResourceRequested(
+            Callback<ICoreWebView2WebResourceRequestedEventHandler>(
+            [](ICoreWebView2*, ICoreWebView2WebResourceRequestedEventArgs* args) -> HRESULT {
+                ComPtr<ICoreWebView2WebResourceRequest> request;
+                args->get_Request(&request);
+                LPWSTR uri;
+                request->get_Uri(&uri);
+                std::wstring wUri(uri);
+                CoTaskMemFree(uri);
+
+                std::string path;
+                auto scheme = wUri.find(L"://");
+                auto firstSlash = scheme == std::wstring::npos
+                    ? std::wstring::npos
+                    : wUri.find(L'/', scheme + 3);
+                if (firstSlash != std::wstring::npos)
+                    path = W2U(wUri.substr(firstSlash + 1));
+                auto qpos = path.find('?');
+                if (qpos != std::string::npos) path = path.substr(0, qpos);
+                auto hpos = path.find('#');
+                if (hpos != std::string::npos) path = path.substr(0, hpos);
+                if (path.empty()) path = "index.html";
+
+                auto* entry = findPakEntry(path);
+                if (!entry) return S_OK;
+
+                auto mime = guessMimeType(path);
+                ComPtr<IStream> stream;
+                stream.Attach(SHCreateMemStream(
+                    reinterpret_cast<const BYTE*>(entry->data), entry->size));
+                if (!stream) return S_OK;
+
+                ComPtr<ICoreWebView2WebResourceResponse> response;
+                g_env->CreateWebResourceResponse(
+                    stream.Get(), 200, L"OK",
+                    (L"Content-Type: " + mime).c_str(),
+                    &response);
+                args->put_Response(response.Get());
+                return S_OK;
+            }).Get(), nullptr);
+        return true;
+    }
+#endif
+
+    auto dir = resolve_frontend_dir();
+    if (dir.empty())
+        return false;
+    ComPtr<ICoreWebView2_3> v3;
+    if (FAILED(view->QueryInterface(IID_PPV_ARGS(&v3))))
+        return false;
+    v3->SetVirtualHostNameToFolderMapping(
+        L"app.localhost", dir.c_str(),
+        COREWEBVIEW2_HOST_RESOURCE_ACCESS_KIND_ALLOW);
+    v3->SetVirtualHostNameToFolderMapping(
+        L"app.local", dir.c_str(),
+        COREWEBVIEW2_HOST_RESOURCE_ACCESS_KIND_ALLOW);
+    return true;
+}
+
 static void setupWebView(ICoreWebView2Controller* ctrl) {
     g_ctrl = ctrl;
     g_ctrl->get_CoreWebView2(&g_view);
@@ -1814,8 +2093,7 @@ static void setupWebView(ICoreWebView2Controller* ctrl) {
     // Background color from config (alpha=255 for opaque)
     ComPtr<ICoreWebView2Controller2> ctrl2;
     if (SUCCEEDED(g_ctrl.As(&ctrl2))) {
-        auto hex = g_cfg.value("/window/backgroundColor"_json_pointer, std::string{"#1a1a2e"});
-        auto clr = parseHexColor(hex);
+        auto clr = currentWindowBackgroundColor();
         BYTE alpha = (g_effectType >= 2) ? 0 : 255;
         ctrl2->put_DefaultBackgroundColor({alpha, GetRValue(clr), GetGValue(clr), GetBValue(clr)});
     }
@@ -1895,71 +2173,16 @@ static void setupWebView(ICoreWebView2Controller* ctrl) {
     if (dev) {
         g_view->Navigate(g_devUrl.c_str());
     } else {
-#ifdef SINGLE_EXE
-        if (!g_pakEntries.empty()) {
-            // Serve resources directly from memory — zero disk I/O
-            g_view->AddWebResourceRequestedFilter(
-                L"http://app.localhost/*", COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL);
-            g_view->add_WebResourceRequested(
-                Callback<ICoreWebView2WebResourceRequestedEventHandler>(
-                [](ICoreWebView2*, ICoreWebView2WebResourceRequestedEventArgs* args) -> HRESULT {
-                    ComPtr<ICoreWebView2WebResourceRequest> request;
-                    args->get_Request(&request);
-                    LPWSTR uri;
-                    request->get_Uri(&uri);
-                    std::wstring wUri(uri);
-                    CoTaskMemFree(uri);
-
-                    const std::wstring prefix = L"http://app.localhost/";
-                    std::string path;
-                    if (wUri.size() > prefix.size())
-                        path = W2U(wUri.substr(prefix.size()));
-                    // Strip query string and fragment
-                    auto qpos = path.find('?');
-                    if (qpos != std::string::npos) path = path.substr(0, qpos);
-                    auto hpos = path.find('#');
-                    if (hpos != std::string::npos) path = path.substr(0, hpos);
-                    if (path.empty()) path = "index.html";
-
-                    auto* entry = findPakEntry(path);
-                    if (!entry) return S_OK; // 404 — let WebView2 handle
-
-                    auto mime = guessMimeType(path);
-                    ComPtr<IStream> stream;
-                    stream.Attach(SHCreateMemStream(
-                        reinterpret_cast<const BYTE*>(entry->data), entry->size));
-                    if (!stream) return S_OK;
-
-                    ComPtr<ICoreWebView2WebResourceResponse> response;
-                    g_env->CreateWebResourceResponse(
-                        stream.Get(), 200, L"OK",
-                        (L"Content-Type: " + mime).c_str(),
-                        &response);
-                    args->put_Response(response.Get());
-                    return S_OK;
-                }).Get(), nullptr);
-
-            g_view->Navigate(L"http://app.localhost/index.html");
-        } else
-#endif
-        {
-            auto dir = resolve_frontend_dir();
-            if (dir.empty()) {
-                MessageBoxW(
-                    g_hwnd,
-                    L"未找到前端资源（index.html）。\n普通构建请保留 dist 目录；如需单文件分发，请使用 bun run build:single 或 bun run package:single。",
-                    L"错误",
-                    MB_ICONERROR);
-                PostMessageW(g_hwnd, WM_CLOSE, 0, 0);
-                return;
-            }
-            ComPtr<ICoreWebView2_3> v3;
-            if (SUCCEEDED(g_view.As(&v3)))
-                v3->SetVirtualHostNameToFolderMapping(
-                    L"app.localhost", dir.c_str(),
-                    COREWEBVIEW2_HOST_RESOURCE_ACCESS_KIND_ALLOW);
-            g_view->Navigate(L"https://app.localhost/index.html");
+        if (!configureAppHost(g_view.Get())) {
+            MessageBoxW(
+                g_hwnd,
+                L"未找到前端资源（index.html）。\n普通构建请保留 dist 目录；如需单文件分发，请使用 bun run build:single 或 bun run package:single。",
+                L"错误",
+                MB_ICONERROR);
+            PostMessageW(g_hwnd, WM_CLOSE, 0, 0);
+            return;
         }
+        g_view->Navigate(L"https://app.localhost/index.html");
     }
     g_view->add_NavigationCompleted(
         Callback<ICoreWebView2NavigationCompletedEventHandler>(
@@ -2004,8 +2227,7 @@ static void init_webview() {
                 if (SUCCEEDED(env10->CreateCoreWebView2ControllerOptions(&opts))) {
                     ComPtr<ICoreWebView2ControllerOptions3> opts3;
                     if (SUCCEEDED(opts.As(&opts3))) {
-                        auto hex = g_cfg.value("/window/backgroundColor"_json_pointer, std::string{"#1a1a2e"});
-                        auto clr = parseHexColor(hex);
+                        auto clr = currentWindowBackgroundColor();
                         BYTE alpha = (g_effectType >= 2) ? 0 : 255;
                         opts3->put_DefaultBackgroundColor({alpha, GetRValue(clr), GetGValue(clr), GetBValue(clr)});
                     }
@@ -2085,16 +2307,15 @@ static LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM w, LPARAM l) {
         if (l) {
             auto setting = W2U((LPCWSTR)l);
             if (setting == "ImmersiveColorSet") {
-                HKEY hKey; DWORD val = 1, sz = sizeof(val);
-                if (RegOpenKeyExW(HKEY_CURRENT_USER,
-                    L"Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize",
-                    0, KEY_READ, &hKey) == ERROR_SUCCESS) {
-                    RegQueryValueExW(hKey, L"AppsUseLightTheme", nullptr, nullptr, (BYTE*)&val, &sz);
-                    RegCloseKey(hKey);
-                }
-                ipc_emit("os.themeChanged", {{"dark", val == 0}});
+                applyNativeTheme();
+                ipc_emit("os.themeChanged", systemThemeInfo());
             }
         }
+        return 0;
+    case WM_THEMECHANGED:
+    case WM_DWMCOLORIZATIONCOLORCHANGED:
+        applyNativeTheme();
+        ipc_emit("os.themeChanged", systemThemeInfo());
         return 0;
     case WM_SETFOCUS:
         if (g_ctrl) g_ctrl->MoveFocus(COREWEBVIEW2_MOVE_FOCUS_REASON_PROGRAMMATIC);
@@ -2106,18 +2327,15 @@ static LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM w, LPARAM l) {
     case WM_CLOSE:
         saveWindowState();
         ipc_emit("window.closing");
-        if (g_trayActive) { ShowWindow(h, SW_HIDE); return 0; }
+        if (g_trayActive) { hideWindowAnimated(h); return 0; }
+        hideWindowAnimated(h);
         DestroyWindow(h);
         return 0;
     case WM_DESTROY:
         // Cleanup watchers
         for (auto& [id, w] : g_watchers) {
-            w->active = false;
-            CancelIoEx(w->hDir, nullptr);
-            WaitForSingleObject(w->hThread, 500);
-            CloseHandle(w->hThread);
-            CloseHandle(w->hDir);
-            delete w;
+            if (stopWatcher(w, 1000))
+                delete w;
         }
         g_watchers.clear();
         if (g_trayActive) Shell_NotifyIconW(NIM_DELETE, &g_nid);
@@ -2158,8 +2376,7 @@ static LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM w, LPARAM l) {
         switch (LOWORD(l)) {
         case WM_LBUTTONUP:    ipc_emit("tray.click"); break;
         case WM_LBUTTONDBLCLK:
-            ShowWindow(g_hwnd, SW_SHOW);
-            SetForegroundWindow(g_hwnd);
+            showWindowAnimated(g_hwnd, IsIconic(g_hwnd) ? SW_RESTORE : SW_SHOW);
             ipc_emit("tray.doubleClick");
             break;
         case WM_RBUTTONUP:    ipc_emit("tray.rightClick"); break;
@@ -2237,8 +2454,7 @@ int WINAPI wWinMain(HINSTANCE hi, HINSTANCE, LPWSTR, int ns) {
         if (GetLastError() == ERROR_ALREADY_EXISTS) {
             HWND existing = FindWindowW(L"QQ", nullptr);
             if (existing) {
-                ShowWindow(existing, SW_SHOW);
-                SetForegroundWindow(existing);
+                showWindowAnimated(existing, IsIconic(existing) ? SW_RESTORE : SW_SHOW);
             }
             if (hMutex) CloseHandle(hMutex);
             CoUninitialize();
@@ -2258,8 +2474,7 @@ int WINAPI wWinMain(HINSTANCE hi, HINSTANCE, LPWSTR, int ns) {
         }
     }
 
-    auto bgHex     = winCfg.value("backgroundColor", std::string{"#1a1a2e"});
-    COLORREF bgClr = parseHexColor(bgHex);
+    COLORREF bgClr = currentWindowBackgroundColor();
 
     // Window class
     WNDCLASSEXW wc{sizeof(wc)};
@@ -2277,15 +2492,16 @@ int WINAPI wWinMain(HINSTANCE hi, HINSTANCE, LPWSTR, int ns) {
     }
     RegisterClassExW(&wc);
 
-    DWORD style = g_frameless
-        ? (WS_THICKFRAME | WS_MINIMIZEBOX | WS_MAXIMIZEBOX | WS_SYSMENU | WS_POPUP | WS_CLIPCHILDREN)
-        : (WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN);
+    // Keep the standard overlapped window semantics even in frameless mode.
+    // WM_NCCALCSIZE removes the visible chrome, while DWM keeps native animations.
+    DWORD style = WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN;
 
     DWORD exStyle = WS_EX_APPWINDOW;
     g_hwnd = CreateWindowExW(exStyle, L"QQ", title.c_str(),
         style,
         CW_USEDEFAULT, CW_USEDEFAULT, width, height,
         nullptr, nullptr, hi, nullptr);
+    enableWindowTransitions(g_hwnd);
 
     // Window state persistence — restore previous position/size
     g_stateFile = app_data_dir() + L"\\window-state.json";
@@ -2306,6 +2522,7 @@ int WINAPI wWinMain(HINSTANCE hi, HINSTANCE, LPWSTR, int ns) {
         applyFramelessDwmAttrs();
         g_bgBrush = CreateSolidBrush(bgClr);
     }
+    applyNativeTheme();
 
     // Enable file drag-drop
     DragAcceptFiles(g_hwnd, TRUE);
@@ -2334,7 +2551,7 @@ int WINAPI wWinMain(HINSTANCE hi, HINSTANCE, LPWSTR, int ns) {
     reg_extras();
 
     // Show window immediately with background color (don't wait for WebView2)
-    ShowWindow(g_hwnd, ns);
+    showWindowAnimated(g_hwnd, ns, true);
     UpdateWindow(g_hwnd);
 
     init_webview();

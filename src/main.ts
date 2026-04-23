@@ -1,4 +1,4 @@
-import { win, dialog, fs, clipboard, tray, app } from './api';
+import { win, dialog, fs, clipboard, tray, app, os, type SystemTheme } from './api';
 import { invoke } from './ipc';
 
 const output = document.getElementById('output')!;
@@ -7,6 +7,48 @@ let alwaysOnTop = false;
 function log(text: string) {
     output.textContent = text;
 }
+
+function hexToRgb(hex: string): [number, number, number] {
+    const value = hex.replace('#', '');
+    if (value.length !== 6) return [0, 120, 212];
+    return [
+        Number.parseInt(value.slice(0, 2), 16),
+        Number.parseInt(value.slice(2, 4), 16),
+        Number.parseInt(value.slice(4, 6), 16),
+    ];
+}
+
+function mix(a: string, b: string, amount: number): string {
+    const ca = hexToRgb(a);
+    const cb = hexToRgb(b);
+    const mixed = ca.map((v, i) => Math.round(v + (cb[i] - v) * amount));
+    return `#${mixed.map(v => v.toString(16).padStart(2, '0')).join('')}`;
+}
+
+function applySystemTheme(theme: SystemTheme) {
+    const root = document.documentElement;
+    const bg = theme.backgroundColor;
+    const fg = theme.foregroundColor;
+    const accent = theme.accentColor;
+    const toward = theme.dark ? '#ffffff' : '#000000';
+    const away = theme.dark ? '#000000' : '#ffffff';
+
+    root.style.setProperty('--bg', bg);
+    root.style.setProperty('--text', fg);
+    root.style.setProperty('--titlebar-bg', mix(bg, away, theme.dark ? 0.12 : 0.03));
+    root.style.setProperty('--panel', mix(bg, toward, theme.dark ? 0.07 : 0.025));
+    root.style.setProperty('--panel-hover', mix(accent, bg, theme.dark ? 0.68 : 0.82));
+    root.style.setProperty('--output-bg', mix(bg, away, theme.dark ? 0.18 : 0.04));
+    root.style.setProperty('--border', mix(accent, bg, theme.dark ? 0.58 : 0.72));
+    root.style.setProperty('--muted', mix(fg, bg, 0.45));
+    root.style.setProperty('--subtle', mix(fg, bg, 0.65));
+    root.style.setProperty('--accent', accent);
+    root.style.setProperty('--output-text', theme.dark ? mix(accent, '#ffffff', 0.35) : mix(accent, '#000000', 0.15));
+    void win.setBackgroundColor(bg).catch(() => {});
+}
+
+void os.theme().then(applySystemTheme).catch(() => {});
+os.onThemeChanged(applySystemTheme);
 
 // ── Frameless titlebar ──────────────────────
 (async () => {

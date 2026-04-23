@@ -5,30 +5,47 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>强强</title>
     <style>
+        :root {
+            color-scheme: dark light;
+            --bg: #1a1a2e;
+            --titlebar-bg: #16162a;
+            --panel: #1e1e3a;
+            --panel-hover: #2a2a4e;
+            --output-bg: #12122a;
+            --border: #333;
+            --text: #eee;
+            --muted: #888;
+            --subtle: #555;
+            --accent: #0078d4;
+            --output-text: #66cc66;
+        }
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
             font-family: "Microsoft YaHei", system-ui, sans-serif;
-            background: #1a1a2e;
-            color: #eee;
+            background: var(--bg);
+            color: var(--text);
             user-select: none;
             display: flex;
             flex-direction: column;
             height: 100vh;
+            transition: background 0.18s ease, color 0.18s ease;
         }
         /* ── Custom titlebar ── */
         .titlebar {
             display: none; /* shown via JS when frameless */
             height: 40px;
-            background: #16162a;
+            background: var(--titlebar-bg);
             flex-shrink: 0;
             align-items: center;
             padding-left: 12px;
+            border-bottom: 1px solid var(--border);
+            transition: background 0.18s ease, border-color 0.18s ease;
         }
         .titlebar.active { display: flex; }
         .titlebar-title {
             flex: 1;
             font-size: 13px;
-            color: #999;
+            color: var(--muted);
             pointer-events: none;
         }
         .titlebar-controls { display: flex; height: 100%; }
@@ -37,7 +54,7 @@
             height: 100%;
             border: none;
             background: transparent;
-            color: #999;
+            color: var(--muted);
             font-size: 12px;
             cursor: pointer;
             display: flex;
@@ -57,29 +74,29 @@
             padding: 2rem;
         }
         h1 { font-size: 2rem; margin-bottom: 0.25rem; }
-        .sub { color: #555; font-size: 0.8rem; margin-bottom: 1.5rem; }
+        .sub { color: var(--subtle); font-size: 0.8rem; margin-bottom: 1.5rem; }
         .section { margin-bottom: 1.25rem; }
-        .section h2 { font-size: 0.85rem; color: #888; margin-bottom: 0.5rem; text-transform: uppercase; letter-spacing: 0.05em; }
+        .section h2 { font-size: 0.85rem; color: var(--muted); margin-bottom: 0.5rem; text-transform: uppercase; letter-spacing: 0.05em; }
         .actions { display: flex; gap: 0.4rem; flex-wrap: wrap; }
         button {
             padding: 0.4rem 1rem;
-            border: 1px solid #333;
-            background: #1e1e3a;
-            color: #ccc;
+            border: 1px solid var(--border);
+            background: var(--panel);
+            color: var(--text);
             border-radius: 5px;
             cursor: pointer;
             font-size: 0.8rem;
-            transition: all 0.15s;
+            transition: background 0.15s, border-color 0.15s, color 0.15s, transform 0.15s;
         }
-        button:hover { background: #2a2a4e; border-color: #555; color: #fff; }
+        button:hover { background: var(--panel-hover); border-color: var(--accent); color: var(--text); }
         button:active { transform: scale(0.97); }
         #output {
             margin-top: 1rem;
             padding: 0.75rem 1rem;
-            background: #12122a;
-            border: 1px solid #222;
+            background: var(--output-bg);
+            border: 1px solid var(--border);
             border-radius: 6px;
-            color: #6c6;
+            color: var(--output-text);
             font-family: "Cascadia Code", Consolas, monospace;
             font-size: 0.8rem;
             min-height: 3em;
@@ -87,6 +104,7 @@
             word-break: break-all;
             max-height: 12em;
             overflow-y: auto;
+            transition: background 0.18s ease, border-color 0.18s ease, color 0.18s ease;
         }
         /* Resize cursors — applied via body.rz-* class, !important wins over per-element cursors */
         body.rz-ew,   body.rz-ew   * { cursor: ew-resize   !important; }

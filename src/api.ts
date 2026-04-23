@@ -37,6 +37,13 @@ export interface HttpResponse {
     body: string;
 }
 
+export interface SystemTheme {
+    dark: boolean;
+    accentColor: string;
+    backgroundColor: string;
+    foregroundColor: string;
+}
+
 // ── Window ────────────────────────────────────
 
 export const win = {
@@ -217,7 +224,9 @@ export const http = {
 export const os = {
     platform:       () => invoke<string>('os.platform'),
     isDarkMode:     () => invoke<boolean>('os.isDarkMode'),
-    onThemeChanged: (h: (data: { dark: boolean }) => void) => on('os.themeChanged', h),
+    theme:          () => invoke<SystemTheme>('os.theme'),
+    accentColor:    () => invoke<string>('os.accentColor'),
+    onThemeChanged: (h: (data: SystemTheme) => void) => on('os.themeChanged', h),
     arch:     () => invoke<string>('os.arch'),
     version:  () => invoke<string>('os.version'),
     hostname: () => invoke<string>('os.hostname'),
