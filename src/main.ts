@@ -7,6 +7,7 @@ import {
     win,
     type DirEntry,
     type FileStat,
+    type ResizeEdge,
     type SystemTheme,
 } from './api';
 import { invoke } from './ipc';
@@ -26,6 +27,7 @@ const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as 
 
 const ui = {
     titlebar: $('titlebar'),
+    resizeLayer: $('resize-layer'),
     address: $('address') as HTMLInputElement,
     fileList: $('file-list'),
     filter: $('filter') as HTMLInputElement,
@@ -445,55 +447,17 @@ async function setupWindowChrome() {
         });
         $('tb-close').addEventListener('click', () => win.close());
 
-        type Edge = 'left'|'right'|'top'|'bottom'|'top-left'|'top-right'|'bottom-left'|'bottom-right';
-        const edgeSize = 6;
-        const classMap: Record<Edge, string> = {
-            left: 'rz-ew',
-            right: 'rz-ew',
-            top: 'rz-ns',
-            bottom: 'rz-ns',
-            'top-left': 'rz-nwse',
-            'bottom-right': 'rz-nwse',
-            'top-right': 'rz-nesw',
-            'bottom-left': 'rz-nesw',
-        };
-        let currentEdge: Edge | null = null;
-
-        const detectEdge = (event: MouseEvent): Edge | null => {
-            const w = window.innerWidth;
-            const h = window.innerHeight;
-            const left = event.clientX < edgeSize;
-            const right = event.clientX >= w - edgeSize;
-            const top = event.clientY < edgeSize;
-            const bottom = event.clientY >= h - edgeSize;
-            if (top && left) return 'top-left';
-            if (top && right) return 'top-right';
-            if (bottom && left) return 'bottom-left';
-            if (bottom && right) return 'bottom-right';
-            if (left) return 'left';
-            if (right) return 'right';
-            if (top) return 'top';
-            if (bottom) return 'bottom';
-            return null;
-        };
-
-        document.addEventListener('mousemove', (event) => {
-            const edge = detectEdge(event);
-            if (edge === currentEdge) return;
-            if (currentEdge) document.body.classList.remove(classMap[currentEdge]);
-            currentEdge = edge;
-            if (edge) document.body.classList.add(classMap[edge]);
-        });
-
-        document.addEventListener('mousedown', (event) => {
-            if (event.button !== 0) return;
-            const edge = detectEdge(event);
-            if (edge) {
+        ui.resizeLayer.classList.add('active');
+        ui.resizeLayer.querySelectorAll<HTMLElement>('[data-resize-edge]').forEach((zone) => {
+            zone.addEventListener('pointerdown', (event) => {
+                if (event.button !== 0) return;
+                const edge = zone.dataset.resizeEdge as ResizeEdge | undefined;
+                if (!edge) return;
                 event.preventDefault();
-                event.stopImmediatePropagation();
+                event.stopPropagation();
                 win.startResize(edge);
-            }
-        }, true);
+            });
+        });
     } catch {}
 }
 

@@ -1,5 +1,6 @@
 // src/api.ts — Typed wrappers for all native commands
 import { invoke, on } from './ipc';
+export { isNativeRuntime, type InvokeOptions } from './ipc';
 
 // ── Types ─────────────────────────────────────
 
@@ -67,7 +68,7 @@ export const win = {
     setProgress:        (value: number) => invoke<boolean>('window.setProgress', { value }),
     startDrag:          () => invoke<boolean>('window.startDrag'),
     startResize:        (edge: ResizeEdge) => invoke<boolean>('window.startResize', { edge }),
-    getConfig:      () => invoke<any>('window.getConfig'),
+    getConfig:      () => invoke<unknown>('window.getConfig'),
     isFrameless:    () => invoke<boolean>('window.isFrameless'),
     createChild: (opts: { title?: string; width?: number; height?: number; url?: string }) =>
         invoke<number>('window.createChild', opts),
@@ -140,7 +141,10 @@ export const shell = {
 export const app = {
     exit:    (code = 0) => invoke<boolean>('app.exit', { code }),
     dataDir: () => invoke<string>('app.dataDir'),
-    checkUpdate:   (url: string) => invoke<any>('app.checkUpdate', { url }),
+    exeDir:  () => invoke<string>('app.exeDir'),
+    /** Extract a file embedded in the single-exe pak to disk. Returns false in portable builds. */
+    extractAsset: (name: string, dest: string) => invoke<boolean>('app.extractAsset', { name, dest }),
+    checkUpdate:   (url: string) => invoke<unknown>('app.checkUpdate', { url }),
     downloadUpdate:(url: string) => invoke<string>('app.downloadUpdate', { url }),
     installUpdate: () => invoke<boolean>('app.installUpdate'),
 };

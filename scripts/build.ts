@@ -134,7 +134,7 @@ if (!nativeOnly) {
         let inlined = false;
         if (singleExe) {
             // Escape any literal </script> in the bundle so it can't terminate the inline
-            // <script> early, a classic cause of a blank single-exe window.
+            // <script> early — a classic cause of a blank single-exe window.
             const safeJs = jsContent.replace(/<\/script>/gi, '<\\/script>');
             const before = html;
             html = html.replace(
@@ -143,7 +143,7 @@ if (!nativeOnly) {
             );
             inlined = html !== before;
             // If the entry <script> didn't match (custom tag, Vite, etc.), don't silently
-            // ship an unservable ./main.ts. Fall back to referencing the packed main.js.
+            // ship an unservable ./main.ts — fall back to referencing the packed main.js.
             if (!inlined) html = html.replace(/\.\/main\.ts/g, './main.js');
         } else {
             html = html.replace('./main.ts', './main.js');

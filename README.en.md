@@ -77,7 +77,7 @@ The default `src/` app is a working file viewer that demonstrates QiangQiang's w
 
 ## API Overview
 
-### Window Management (16 commands + 9 events)
+### Window Management (17 commands + 9 events)
 
 ```typescript
 import { win } from './api';
@@ -88,6 +88,7 @@ await win.center();
 await win.maximize();
 await win.setAlwaysOnTop(true);
 await win.startDrag();  // Custom titlebar dragging
+await win.startResize('bottom-right'); // Custom edge/corner resize
 
 // Event listeners
 win.onResized(({ w, h }) => console.log(`${w}×${h}`));
@@ -239,7 +240,11 @@ await devtools.open();
         "height": 768,
         "minWidth": 400,
         "minHeight": 300,
+        "center": true,
+        "visible": true,
+        "showWhenReady": true,
         "frameless": true,
+        "saveWindowState": true,
         "titleBarHeight": 40,
         "borderSize": 6,
         "backgroundColor": "#1a1a2e",
@@ -253,6 +258,8 @@ await devtools.open();
     }
 }
 ```
+
+Window sizing uses the WebView client area. When `frameless` is `false`, QiangQiang converts `width`, `height`, `minWidth`, and `minHeight` to the correct native outer-window dimensions. `showWhenReady` (default `true`) keeps the window hidden until WebView2 paints its first frame, eliminating the blank/native-framed startup flash; set it to `false` to reveal the window as soon as it is created. Use `visible: false` for a delayed first show after the frontend is ready, and `saveWindowState: false` when an app should always reopen with its configured size.
 
 ## Project Structure
 
@@ -289,7 +296,7 @@ Event:    { event: string, data: any }
 
 | Category | Commands |
 |---|---|
-| **Window** | `setTitle` `minimize` `maximize` `restore` `close` `show` `hide` `size` `setSize` `position` `setPosition` `center` `setAlwaysOnTop` `isMaximized` `startDrag` `isFrameless` |
+| **Window** | `setTitle` `minimize` `maximize` `restore` `close` `show` `hide` `size` `setSize` `position` `setPosition` `center` `setAlwaysOnTop` `isMaximized` `startDrag` `startResize` `isFrameless` |
 | **Window Config** | `getConfig` `saveState` `loadState` |
 | **Dialogs** | `openFile` `saveFile` `openFolder` `message` `confirm` |
 | **File System** | `readTextFile` `writeTextFile` `exists` `readDir` `mkdir` `remove` `rename` `stat` |

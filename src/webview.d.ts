@@ -1,6 +1,6 @@
 interface Chrome {
     webview: {
-        postMessage(message: any): void;
+        postMessage(message: unknown): void;
         addEventListener(type: 'message', listener: (e: MessageEvent) => void): void;
         removeEventListener(type: 'message', listener: (e: MessageEvent) => void): void;
     };

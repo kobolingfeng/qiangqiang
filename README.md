@@ -110,7 +110,7 @@ bun run dev
 
 ## API 总览
 
-### 窗口管理 (16 命令 + 9 事件)
+### 窗口管理 (17 命令 + 9 事件)
 
 ```typescript
 import { win } from './api';
@@ -121,6 +121,7 @@ await win.center();
 await win.maximize();
 await win.setAlwaysOnTop(true);
 await win.startDrag();  // 自定义标题栏拖拽
+await win.startResize('bottom-right');  // 自定义边角缩放
 await win.setBackgroundColor('#1a1a2e');  // 动态切换主题时同步 DWM 边框色
 await win.setEffect('mica');  // Windows 11 Mica / Acrylic 特效
 
@@ -310,7 +311,12 @@ await devtools.open();
         "height": 768,
         "minWidth": 400,
         "minHeight": 300,
+        "center": true,
+        "visible": true,
+        "showWhenReady": true,
         "frameless": true,
+        "rounded": true,
+        "saveWindowState": true,
         "titleBarHeight": 40,
         "borderSize": 6,
         "backgroundColor": "#1a1a2e",
@@ -334,7 +340,14 @@ await devtools.open();
 
 | 字段 | 说明 |
 |---|---|
-| `frameless` | 启用无边框 Composition 模式（WebView2 填满窗口，零边框） |
+| `width` / `height` | 窗口内容区尺寸；原生装饰窗口会自动换算标题栏与边框尺寸 |
+| `minWidth` / `minHeight` | 最小内容区尺寸；原生装饰窗口会自动换算为外框限制 |
+| `center` | 首次打开时居中显示；有持久化窗口状态时优先恢复状态 |
+| `visible` | 是否启动后立即显示；设为 `false` 可在前端加载完成后调用 `window.show` |
+| `showWhenReady` | 是否等 WebView2 渲染完首帧后再显示窗口（默认 `true`），消除启动时的白屏 / 原生标题栏闪现；设为 `false` 则窗口创建后立即显示 |
+| `frameless` | 启用无边框 Composition 模式；设为 `false` 时使用 Windows 原生标题栏和边框 |
+| `rounded` | 无边框窗口是否使用 Win11 圆角 + 原生 DWM 投影阴影（默认 `true`）；设为 `false` 用直角 |
+| `saveWindowState` | 是否自动保存并恢复窗口位置、尺寸和最大化状态 |
 | `borderSize` | 窗口边缘 resize 手柄的 hit-test 宽度（像素） |
 | `backgroundColor` | 窗口默认背景色 |
 | `followSystemTheme` | 跟随 Windows 主题深浅色和强调色变化 |
@@ -378,7 +391,7 @@ await devtools.open();
 
 | 分类 | 命令 | 说明 |
 |---|---|---|
-| **窗口** | `window.setTitle` `window.minimize` `window.maximize` `window.restore` `window.close` `window.show` `window.hide` `window.size` `window.setSize` `window.position` `window.setPosition` `window.center` `window.setAlwaysOnTop` `window.isMaximized` `window.setBackgroundColor` `window.setEffect` `window.setOpacity` `window.setProgress` `window.startDrag` `window.isFrameless` | 窗口管理 |
+| **窗口** | `window.setTitle` `window.minimize` `window.maximize` `window.restore` `window.close` `window.show` `window.hide` `window.size` `window.setSize` `window.position` `window.setPosition` `window.center` `window.setAlwaysOnTop` `window.isMaximized` `window.setBackgroundColor` `window.setEffect` `window.setOpacity` `window.setProgress` `window.startDrag` `window.startResize` `window.isFrameless` | 窗口管理 |
 | **多窗口** | `window.createChild` `window.closeChild` `window.listChildren` | 子窗口 |
 | **窗口配置** | `window.getConfig` `window.saveState` `window.loadState` | 配置 + 持久化 |
 | **对话框** | `dialog.openFile` `dialog.saveFile` `dialog.openFolder` `dialog.message` `dialog.confirm` | 系统对话框 |
@@ -501,6 +514,16 @@ const { exitCode, stdout, stderr } = await shell.run('git', ['status']);
 .titlebar button {
     app-region: no-drag;     /* 按钮等交互元素排除 */
 }
+```
+
+## 无边框窗口缩放
+
+默认文件查看器示例会在窗口四边和四角铺设不可见 resize hit zone。鼠标移到边缘会显示系统缩放光标，拖动后交给 Win32 原生缩放处理。自定义前端也可以直接调用：
+
+```ts
+import { win } from './api';
+
+await win.startResize('bottom-right');
 ```
 
 ## 窗口特效

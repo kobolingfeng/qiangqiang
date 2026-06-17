@@ -2,6 +2,8 @@
 // Supports built-in Bun bundler or custom dev server (Vite, Webpack, etc.)
 import { existsSync, mkdirSync, watch } from 'fs';
 import { join, resolve } from 'path';
+import { createServer } from 'net';
+import { splitCommandLine, withResolvedDevServerPort } from './dev-utils';
 
 const ROOT = resolve(import.meta.dir, '..');
 const DIST = join(ROOT, 'dist');
@@ -9,14 +11,38 @@ const SRC  = join(ROOT, 'src');
 
 // ── Load config ───────────────────────────────────────
 let PORT = 3000;
+const DEV_HOST = '127.0.0.1';
 let devCommand: string | undefined;
 let waitForPort = true;
 try {
     const cfg = await Bun.file(join(ROOT, 'app.config.json')).json();
-    PORT       = cfg?.dev?.port ?? 3000;
+    PORT       = Number(process.env.PORT || cfg?.dev?.port || 3000);
     devCommand = cfg?.dev?.command;
     waitForPort = cfg?.dev?.waitForPort ?? true;
 } catch {}
+
+async function isPortFree(port: number) {
+    return new Promise<boolean>((resolve) => {
+        const server = createServer();
+        server.once('error', () => resolve(false));
+        server.once('listening', () => server.close(() => resolve(true)));
+        server.listen(port, DEV_HOST);
+    });
+}
+
+async function pickPort(preferred: number) {
+    for (let port = preferred; port < preferred + 50; port++) {
+        if (await isPortFree(port)) {
+            if (port !== preferred) {
+                console.log(`⚠️ Port ${preferred} is busy, using ${port} instead.`);
+            }
+            return port;
+        }
+    }
+    throw new Error(`No free dev port found from ${preferred} to ${preferred + 49}`);
+}
+
+PORT = await pickPort(PORT);
 
 // ── Check native exe ──────────────────────────────────
 const exePath = join(DIST, 'app.exe');
@@ -44,30 +70,44 @@ if (devCommand) {
     if (existsSync(cfgSrc))
         await Bun.write(join(DIST, 'app.config.json'), Bun.file(cfgSrc));
 
-    const [cmd, ...args] = devCommand.split(' ');
+    const [cmd, ...rawArgs] = splitCommandLine(devCommand);
+    if (!cmd) {
+        console.error('❌ dev.command is empty.');
+        process.exit(1);
+    }
+    const args = withResolvedDevServerPort(cmd, rawArgs, PORT);
     const devProc = Bun.spawn([cmd, ...args], {
         cwd: ROOT,
         stdout: 'inherit',
         stderr: 'inherit',
-        env: { ...process.env, PORT: String(PORT) },
+        env: { ...process.env, PORT: String(PORT), VITE_PORT: String(PORT) },
     });
 
     if (waitForPort) {
-        console.log(`⏳ Waiting for dev server on port ${PORT}...`);
+        const devOrigin = `http://${DEV_HOST}:${PORT}`;
+        console.log(`⏳ Waiting for dev server on ${devOrigin}...`);
         const start = Date.now();
         const timeout = 30000;
+        let ready = false;
         while (Date.now() - start < timeout) {
             try {
-                await fetch(`http://localhost:${PORT}`);
+                await fetch(devOrigin);
+                ready = true;
                 break;
             } catch {
                 await Bun.sleep(300);
             }
         }
+        if (!ready) {
+            devProc.kill();
+            console.error(`❌ Dev server did not become reachable on port ${PORT} within ${timeout / 1000}s.`);
+            process.exit(1);
+        }
     }
 
-    console.log(`🚀 Launching app → http://localhost:${PORT}`);
-    const appProc = Bun.spawn([exePath, '--dev', `http://localhost:${PORT}`], {
+    const devOrigin = `http://${DEV_HOST}:${PORT}`;
+    console.log(`🚀 Launching app → ${devOrigin}`);
+    const appProc = Bun.spawn([exePath, '--dev', devOrigin], {
         stdout: 'inherit',
         stderr: 'inherit',
     });
@@ -130,6 +170,7 @@ watch(SRC, { recursive: true }, async (_event, filename) => {
 });
 
 const server = Bun.serve({
+    hostname: DEV_HOST,
     port: PORT,
     async fetch(req) {
         const url = new URL(req.url);
@@ -149,11 +190,12 @@ const server = Bun.serve({
     },
 });
 
-console.log(`🌐 Dev server: http://localhost:${server.port}`);
+const builtInDevOrigin = `http://${DEV_HOST}:${server.port}`;
+console.log(`🌐 Dev server: ${builtInDevOrigin}`);
 
 // ── Launch native shell ───────────────────────────────
 console.log('🚀 Launching app...');
-const proc = Bun.spawn([exePath, '--dev', `http://localhost:${PORT}`], {
+const proc = Bun.spawn([exePath, '--dev', builtInDevOrigin], {
     stdout: 'inherit',
     stderr: 'inherit',
 });

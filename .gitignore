@@ -1,8 +1,10 @@
 deps/
 dist/
 release/
+coverage/
 native/build/
 native/_embedded.*
+*.log
 *.exe
 !examples/*.exe
 *.obj

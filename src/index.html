@@ -36,6 +36,8 @@
         }
         .titlebar {
             display: none;
+            position: relative;
+            z-index: 20;
             height: 40px;
             background: var(--titlebar-bg);
             border-bottom: 1px solid var(--border);
@@ -307,10 +309,64 @@
             color: var(--muted);
             font-size: 12px;
         }
-        body.rz-ew,   body.rz-ew   * { cursor: ew-resize   !important; }
-        body.rz-ns,   body.rz-ns   * { cursor: ns-resize   !important; }
-        body.rz-nwse, body.rz-nwse * { cursor: nwse-resize !important; }
-        body.rz-nesw, body.rz-nesw * { cursor: nesw-resize !important; }
+        .resize-layer {
+            display: none;
+            position: fixed;
+            inset: 0;
+            z-index: 2147483000;
+            pointer-events: none;
+        }
+        .resize-layer.active { display: block; }
+        .resize-zone {
+            position: absolute;
+            pointer-events: auto;
+            background: transparent;
+        }
+        .resize-top,
+        .resize-bottom {
+            left: 10px;
+            right: 10px;
+            height: 6px;
+            cursor: ns-resize;
+        }
+        .resize-top { top: 0; }
+        .resize-bottom { bottom: 0; }
+        .resize-left,
+        .resize-right {
+            top: 10px;
+            bottom: 10px;
+            width: 6px;
+            cursor: ew-resize;
+        }
+        .resize-left { left: 0; }
+        .resize-right { right: 0; }
+        .resize-top-left,
+        .resize-top-right,
+        .resize-bottom-left,
+        .resize-bottom-right {
+            width: 12px;
+            height: 12px;
+        }
+        .resize-top-left {
+            top: 0;
+            left: 0;
+            cursor: nwse-resize;
+        }
+        .resize-top-right {
+            top: 0;
+            right: 0;
+            cursor: nesw-resize;
+        }
+        .resize-bottom-left {
+            bottom: 0;
+            left: 0;
+            cursor: nesw-resize;
+        }
+        .resize-bottom-right {
+            right: 0;
+            bottom: 0;
+            cursor: nwse-resize;
+        }
         @media (max-width: 860px) {
             .toolbar { grid-template-columns: 1fr; }
             .main { grid-template-columns: 1fr; grid-template-rows: 220px minmax(280px, 1fr) 210px; }
@@ -320,6 +376,17 @@
     </style>
 </head>
 <body>
+    <div class="resize-layer" id="resize-layer" aria-hidden="true">
+        <div class="resize-zone resize-top" data-resize-edge="top"></div>
+        <div class="resize-zone resize-right" data-resize-edge="right"></div>
+        <div class="resize-zone resize-bottom" data-resize-edge="bottom"></div>
+        <div class="resize-zone resize-left" data-resize-edge="left"></div>
+        <div class="resize-zone resize-top-left" data-resize-edge="top-left"></div>
+        <div class="resize-zone resize-top-right" data-resize-edge="top-right"></div>
+        <div class="resize-zone resize-bottom-left" data-resize-edge="bottom-left"></div>
+        <div class="resize-zone resize-bottom-right" data-resize-edge="bottom-right"></div>
+    </div>
+
     <div class="titlebar" id="titlebar">
         <span class="titlebar-title">强强文件查看器</span>
         <div class="titlebar-controls">

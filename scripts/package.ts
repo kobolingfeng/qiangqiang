@@ -1,6 +1,6 @@
 // scripts/package.ts — Package dist/ into a portable zip
-import { execSync } from 'child_process';
-import { existsSync, mkdirSync, readFileSync } from 'fs';
+import { execFileSync, execSync } from 'child_process';
+import { mkdirSync, readFileSync } from 'fs';
 import { join } from 'path';
 
 const root = join(import.meta.dir, '..');
@@ -9,11 +9,34 @@ const out  = join(root, 'release');
 const singleExe = process.argv.includes('--single-exe');
 const buildCommand = singleExe ? 'bun run build:single' : 'bun run build';
 
-// Ensure built
-if (singleExe || !existsSync(join(dist, 'app.exe'))) {
-    console.log('📦 Building first...');
-    execSync(buildCommand, { cwd: root, stdio: 'inherit' });
+function sanitizeFileName(value: string): string {
+    return value
+        .replace(/[<>:"/\\|?*\x00-\x1f]/g, '-')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .replace(/[. ]+$/g, '') || 'app';
 }
+
+function quotePowerShell(value: string): string {
+    return `'${value.replace(/'/g, "''")}'`;
+}
+
+function compressArchive(sourcePath: string, destinationPath: string, useLiteralPath = true) {
+    const pathParameter = useLiteralPath ? '-LiteralPath' : '-Path';
+    execFileSync(
+        'powershell',
+        [
+            '-NoProfile',
+            '-Command',
+            `Compress-Archive ${pathParameter} ${quotePowerShell(sourcePath)} -DestinationPath ${quotePowerShell(destinationPath)} -Force`,
+        ],
+        { cwd: root, stdio: 'inherit' },
+    );
+}
+
+// Always build before packaging so release artifacts cannot lag behind source edits.
+console.log('📦 Building first...');
+execSync(buildCommand, { cwd: root, stdio: 'inherit' });
 
 // Read config for name
 let name = 'app';
@@ -23,21 +46,15 @@ try {
 } catch {}
 
 mkdirSync(out, { recursive: true });
-const zipName = `${name}-${singleExe ? 'single' : 'portable'}.zip`;
+const zipName = `${sanitizeFileName(name)}-${singleExe ? 'single' : 'portable'}.zip`;
 const zipPath = join(out, zipName);
 
 console.log(`📦 Packaging → release/${zipName}`);
 
 if (singleExe) {
-    execSync(
-        `powershell -NoProfile -Command "Compress-Archive -LiteralPath '${join(dist, 'app.exe')}' -DestinationPath '${zipPath}' -Force"`,
-        { cwd: root, stdio: 'inherit' }
-    );
+    compressArchive(join(dist, 'app.exe'), zipPath);
 } else {
-    execSync(
-        `powershell -NoProfile -Command "Compress-Archive -Path '${dist}\\*' -DestinationPath '${zipPath}' -Force"`,
-        { cwd: root, stdio: 'inherit' }
-    );
+    compressArchive(join(dist, '*'), zipPath, false);
 }
 
 const { size } = Bun.file(zipPath);

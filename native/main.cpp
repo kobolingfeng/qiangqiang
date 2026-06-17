@@ -37,6 +37,7 @@
 #include <dwmapi.h>
 #include <windowsx.h>
 #include <winhttp.h>
+#include <cctype>
 #include <mutex>
 #include <atomic>
 #include <cstdio>
@@ -75,6 +76,20 @@ static std::wstring U2W(const std::string& s) {
     return w;
 }
 
+static std::string ascii_lower(std::string s) {
+    std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) {
+        return (char)std::tolower(c);
+    });
+    return s;
+}
+
+static std::string trim_ascii(std::string s) {
+    auto is_space = [](unsigned char c) { return std::isspace(c) != 0; };
+    while (!s.empty() && is_space((unsigned char)s.front())) s.erase(s.begin());
+    while (!s.empty() && is_space((unsigned char)s.back())) s.pop_back();
+    return s;
+}
+
 static int hex_value(char c) {
     if (c >= '0' && c <= '9') return c - '0';
     if (c >= 'a' && c <= 'f') return c - 'a' + 10;
@@ -98,6 +113,89 @@ static std::string url_decode_path(const std::string& value) {
         out.push_back(value[i] == '\\' ? '/' : value[i]);
     }
     return out;
+}
+
+static bool is_allowed_shell_target(const std::string& target) {
+    auto value = trim_ascii(target);
+    if (value.empty()) return false;
+    if (std::any_of(value.begin(), value.end(), [](unsigned char c) { return c < 0x20; })) return false;
+
+    auto lower = ascii_lower(value);
+    auto colon = lower.find(':');
+    if (colon != std::string::npos) {
+        if (colon == 1 && std::isalpha((unsigned char)lower[0]) &&
+            value.size() > 2 && (value[2] == '\\' || value[2] == '/')) {
+            return true;
+        }
+
+        auto scheme = lower.substr(0, colon + 1);
+        return scheme == "http:" || scheme == "https:" || scheme == "mailto:" || scheme == "file:";
+    }
+
+    return value.rfind("\\\\", 0) == 0;
+}
+
+static bool is_http_token(const std::string& value) {
+    if (value.empty() || value.size() > 32) return false;
+    return std::all_of(value.begin(), value.end(), [](unsigned char c) {
+        return std::isalnum(c) || c == '-' || c == '_';
+    });
+}
+
+static bool has_header_injection_chars(const std::string& value) {
+    return value.find('\r') != std::string::npos || value.find('\n') != std::string::npos;
+}
+
+static std::wstring quote_windows_arg(const std::wstring& arg) {
+    if (arg.empty()) return L"\"\"";
+    bool needsQuotes = arg.find_first_of(L" \t\n\v\"") != std::wstring::npos;
+    if (!needsQuotes) return arg;
+
+    std::wstring out = L"\"";
+    size_t backslashes = 0;
+    for (wchar_t ch : arg) {
+        if (ch == L'\\') {
+            backslashes++;
+        } else if (ch == L'"') {
+            out.append(backslashes * 2 + 1, L'\\');
+            out.push_back(ch);
+            backslashes = 0;
+        } else {
+            out.append(backslashes, L'\\');
+            backslashes = 0;
+            out.push_back(ch);
+        }
+    }
+    out.append(backslashes * 2, L'\\');
+    out.push_back(L'"');
+    return out;
+}
+
+static std::wstring safe_path_component(std::wstring value, const std::wstring& fallback) {
+    for (auto& ch : value) {
+        if (ch < 32 || wcschr(L"<>:\"/\\|?*", ch)) ch = L'-';
+    }
+    while (!value.empty() && (value.back() == L'.' || value.back() == L' ')) value.pop_back();
+    while (!value.empty() && value.front() == L' ') value.erase(value.begin());
+    return value.empty() ? fallback : value;
+}
+
+static bool is_dangerous_remove_target(const std::string& rawPath) {
+    auto path = trim_ascii(rawPath);
+    if (path.empty() || path == "/" || path == "\\") return true;
+    if (path.size() == 2 && path[1] == ':' && std::isalpha((unsigned char)path[0])) return true;
+
+    std::error_code ec;
+    auto normalized = fspath::weakly_canonical(fspath::path(U2W(path)), ec);
+    if (ec) {
+        ec.clear();
+        normalized = fspath::absolute(fspath::path(U2W(path)), ec);
+        if (ec) return true;
+    }
+    normalized = normalized.lexically_normal();
+
+    const auto root = normalized.root_path();
+    return !root.empty() && normalized == root;
 }
 
 static std::wstring exe_dir() {
@@ -153,13 +251,57 @@ static bool                              g_webviewReady = false;
 // Config
 static json g_cfg;
 static bool g_frameless    = false;
+static bool g_rounded      = true;   // Win11 rounded corners + DWM shadow for frameless windows
+static bool g_saveWindowState = true;
+static bool g_allowWebviewPermissions = false;
 static int  g_effectType   = 0; // 0=none, 2=mica, 3=acrylic, 4=micaAlt
+static bool g_deferFirstShow = false;       // showWhenReady: keep window hidden until WebView2 paints
+static int  g_firstShowCmd   = SW_SHOWNORMAL; // the show command to use once content is ready
 static std::unordered_map<std::string, bool> g_permissions; // cmd -> allowed
 
 // Tray
 #define WM_TRAYICON (WM_USER + 1)
 static NOTIFYICONDATAW g_nid = {};
 static bool            g_trayActive = false;
+static HICON           g_appIconLarge = nullptr;
+static HICON           g_appIconSmall = nullptr;
+
+static HICON loadAppIcon(HINSTANCE hInstance, int cx, int cy) {
+    HICON icon = (HICON)LoadImageW(
+        hInstance,
+        MAKEINTRESOURCEW(IDI_APP),
+        IMAGE_ICON,
+        cx,
+        cy,
+        LR_DEFAULTCOLOR);
+    if (!icon) {
+        icon = (HICON)LoadImageW(
+            nullptr,
+            IDI_APPLICATION,
+            IMAGE_ICON,
+            cx,
+            cy,
+            LR_SHARED);
+    }
+    return icon ? icon : LoadIconW(nullptr, IDI_APPLICATION);
+}
+
+static void initAppIcons(HINSTANCE hInstance) {
+    if (!g_appIconLarge) {
+        g_appIconLarge = loadAppIcon(
+            hInstance,
+            GetSystemMetrics(SM_CXICON),
+            GetSystemMetrics(SM_CYICON));
+    }
+    if (!g_appIconSmall) {
+        g_appIconSmall = loadAppIcon(
+            hInstance,
+            GetSystemMetrics(SM_CXSMICON),
+            GetSystemMetrics(SM_CYSMICON));
+    }
+    if (!g_appIconSmall) g_appIconSmall = g_appIconLarge;
+    if (!g_appIconLarge) g_appIconLarge = g_appIconSmall;
+}
 
 // File watchers
 struct FileWatcher {
@@ -222,7 +364,7 @@ static std::wstring app_data_dir() {
     PWSTR p = nullptr;
     if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_LocalAppData, 0, nullptr, &p))) {
         auto title = g_cfg.value("/window/title"_json_pointer, std::string{"QQ"});
-        g_appDataDir = std::wstring(p) + L"\\" + U2W(title);
+        g_appDataDir = std::wstring(p) + L"\\" + safe_path_component(U2W(title), L"QQ");
         CoTaskMemFree(p);
     } else {
         g_appDataDir = exe_dir() + L"\\data";
@@ -344,6 +486,12 @@ static void applyFramelessDwmAttrs() {
 
     // DWMWA_USE_IMMERSIVE_DARK_MODE = 20
     DwmSetWindowAttribute(g_hwnd, 20, &darkMode, sizeof(darkMode));
+    // DWMWA_WINDOW_CORNER_PREFERENCE = 33 — Win11 rounded corners (default on).
+    // Once WM_NCCALCSIZE strips the frame, Win11 stops auto-rounding the borderless
+    // window (square corners + no shadow); requesting ROUND explicitly restores both.
+    // DWMWCP_ROUND = 2, DWMWCP_DONOTROUND = 1. Toggle via window.rounded (default true).
+    DWORD cornerPref = g_rounded ? 2u : 1u;
+    DwmSetWindowAttribute(g_hwnd, 33, &cornerPref, sizeof(cornerPref));
     // DWMWA_BORDER_COLOR = 34 — concrete color matching bg is more reliable
     // than DWMWA_COLOR_NONE which can flash on defocus on some installs.
     DwmSetWindowAttribute(g_hwnd, 34, &g_bgClr, sizeof(g_bgClr));
@@ -541,9 +689,15 @@ static void applyNativeTheme() {
     BOOL darkMode = systemUsesDarkMode() ? TRUE : FALSE;
     DwmSetWindowAttribute(g_hwnd, 20, &darkMode, sizeof(darkMode));
 
-    COLORREF border = systemAccentColor();
-    DwmSetWindowAttribute(g_hwnd, 34, &border, sizeof(border));
-    DwmSetWindowAttribute(g_hwnd, 35, &g_bgClr, sizeof(g_bgClr));
+    if (g_frameless) {
+        DwmSetWindowAttribute(g_hwnd, 34, &g_bgClr, sizeof(g_bgClr));
+        DwmSetWindowAttribute(g_hwnd, 35, &g_bgClr, sizeof(g_bgClr));
+    } else {
+        COLORREF border = darkMode ? RGB(64, 70, 82) : RGB(218, 221, 227);
+        const COLORREF captionDefault = 0xFFFFFFFF; // DWMWA_COLOR_DEFAULT
+        DwmSetWindowAttribute(g_hwnd, 34, &border, sizeof(border));
+        DwmSetWindowAttribute(g_hwnd, 35, &captionDefault, sizeof(captionDefault));
+    }
 
     if (g_bgBrush) DeleteObject(g_bgBrush);
     g_bgBrush = CreateSolidBrush(g_bgClr);
@@ -817,9 +971,7 @@ static void reg_fs() {
     });
     ipc_on("fs.remove", [](const json& a) -> json {
         auto path = a.value("path", std::string{});
-        bool driveRoot = path.size() >= 2 && path[1] == ':' &&
-            (path.size() == 2 || (path.size() == 3 && (path[2] == '\\' || path[2] == '/')));
-        if (path.empty() || path == "/" || path == "\\" || driveRoot)
+        if (is_dangerous_remove_target(path))
             throw std::runtime_error("Refusing to remove root/drive path");
         fspath::remove_all(U2W(path));
         return true;
@@ -880,8 +1032,11 @@ static void reg_clipboard() {
 static void reg_shell_app() {
     ipc_on("shell.open", [](const json& a) -> json {
         auto url = a.value("url", std::string{});
-        if (url.empty()) return false;
-        ShellExecuteW(nullptr, L"open", U2W(url).c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+        auto target = trim_ascii(url);
+        if (target.empty()) return false;
+        if (!is_allowed_shell_target(target)) throw std::runtime_error("blocked unsafe shell.open target");
+        auto ret = (INT_PTR)ShellExecuteW(nullptr, L"open", U2W(target).c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+        if (ret <= 32) throw std::runtime_error("failed to open shell target");
         return true;
     });
     ipc_on("shell.execute", [](const json& a) -> json {
@@ -890,18 +1045,16 @@ static void reg_shell_app() {
         std::wstring args;
         if (a.contains("args") && a["args"].is_array()) {
             for (auto& arg : a["args"]) {
+                if (!arg.is_string()) throw std::runtime_error("shell.execute args must be strings");
                 if (!args.empty()) args += L' ';
-                auto s = U2W(arg.get<std::string>());
-                if (s.find(L' ') != std::wstring::npos)
-                    args += L'"' + s + L'"';
-                else
-                    args += s;
+                args += quote_windows_arg(U2W(arg.get<std::string>()));
             }
         }
         auto ret = (INT_PTR)ShellExecuteW(nullptr, nullptr, U2W(program).c_str(),
                                           args.empty() ? nullptr : args.c_str(),
                                           nullptr, SW_SHOWNORMAL);
-        return ret > 32;
+        if (ret <= 32) throw std::runtime_error("failed to execute program");
+        return true;
     });
     ipc_on("app.exit", [](const json& a) -> json {
         PostQuitMessage(a.value("code", 0));
@@ -909,6 +1062,32 @@ static void reg_shell_app() {
     });
     ipc_on("app.dataDir", [](const json&) -> json {
         return W2U(app_data_dir());
+    });
+    ipc_on("app.exeDir", [](const json&) -> json {
+        return W2U(exe_dir());
+    });
+    // Extract a file embedded in the single-exe pak to disk (for sidecar binaries
+    // that must run from a real path). Returns false in portable builds (nothing
+    // is embedded) or when the named asset isn't found.
+    ipc_on("app.extractAsset", [](const json& a) -> json {
+        auto name = a.value("name", std::string{});
+        auto dest = a.value("dest", std::string{});
+        if (name.empty() || dest.empty()) throw std::runtime_error("name and dest are required");
+#ifdef SINGLE_EXE
+        const PakEntry* e = findPakEntry(name);
+        if (!e) return false;
+        auto wdest = U2W(dest);
+        std::error_code ec;
+        fspath::create_directories(fspath::path(wdest).parent_path(), ec);
+        std::ofstream out(wdest, std::ios::binary | std::ios::trunc);
+        if (!out) throw std::runtime_error("cannot open destination for writing");
+        out.write(e->data, e->size);
+        out.close();
+        return out.good();
+#else
+        (void)name; (void)dest;
+        return false;
+#endif
     });
     ipc_on("window.startDrag", [](const json&) -> json {
         ReleaseCapture();
@@ -1015,7 +1194,7 @@ static void reg_notification() {
         nid.hWnd  = g_hwnd;
         nid.uID   = 99;
         nid.uFlags = NIF_ICON | NIF_INFO;
-        nid.hIcon  = LoadIconW(nullptr, IDI_APPLICATION);
+        nid.hIcon  = g_appIconSmall ? g_appIconSmall : LoadIconW(nullptr, IDI_APPLICATION);
         wcsncpy_s(nid.szInfoTitle, title.c_str(), _TRUNCATE);
         wcsncpy_s(nid.szInfo, body.c_str(), _TRUNCATE);
         nid.dwInfoFlags = NIIF_INFO;
@@ -1105,6 +1284,11 @@ static void reg_http() {
         if (!crackHttpUrl(url, uc, host, path, extra, objectPath))
             throw std::runtime_error("Invalid URL");
 
+        if (uc.nScheme != INTERNET_SCHEME_HTTP && uc.nScheme != INTERNET_SCHEME_HTTPS)
+            throw std::runtime_error("Only http and https URLs are supported");
+        if (!is_http_token(method))
+            throw std::runtime_error("Invalid HTTP method");
+
         bool https = (uc.nScheme == INTERNET_SCHEME_HTTPS);
         HINTERNET hSession = WinHttpOpen(L"QQ/1.0", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
                                           WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
@@ -1127,6 +1311,8 @@ static void reg_http() {
         // Add custom headers
         std::wstring allHeaders;
         for (auto& [k, v] : hdrs.items()) {
+            if (!v.is_string() || !is_http_token(k) || has_header_injection_chars(v.get<std::string>()))
+                throw std::runtime_error("Invalid HTTP header");
             allHeaders += U2W(k) + L": " + U2W(v.get<std::string>()) + L"\r\n";
         }
         if (!allHeaders.empty())
@@ -1361,7 +1547,7 @@ static void reg_watcher() {
 static std::wstring g_stateFile;
 
 static void saveWindowState() {
-    if (g_stateFile.empty()) return;
+    if (!g_saveWindowState || g_stateFile.empty()) return;
     WINDOWPLACEMENT wp{sizeof(wp)};
     GetWindowPlacement(g_hwnd, &wp);
     json state = {
@@ -1376,7 +1562,7 @@ static void saveWindowState() {
 }
 
 static json loadWindowState() {
-    if (g_stateFile.empty()) return {};
+    if (!g_saveWindowState || g_stateFile.empty()) return {};
     std::ifstream f(g_stateFile);
     if (!f) return {};
     try { json j; f >> j; return j; }
@@ -1421,7 +1607,7 @@ static void reg_tray() {
         g_nid.uID              = 1;
         g_nid.uFlags           = NIF_ICON | NIF_TIP | NIF_MESSAGE;
         g_nid.uCallbackMessage = WM_TRAYICON;
-        g_nid.hIcon            = LoadIconW(nullptr, IDI_APPLICATION);
+        g_nid.hIcon            = g_appIconSmall ? g_appIconSmall : LoadIconW(nullptr, IDI_APPLICATION);
         auto tip = U2W(a.value("tooltip", std::string{"App"}));
         wcsncpy_s(g_nid.szTip, tip.c_str(), _TRUNCATE);
         Shell_NotifyIconW(NIM_ADD, &g_nid);
@@ -1670,7 +1856,10 @@ static bool downloadFile(const std::string& url, const std::wstring& dest) {
     wchar_t host[256]{}, path[2048]{}, extra[2048]{};
     std::wstring objectPath;
     if (!crackHttpUrl(url, uc, host, path, extra, objectPath)) return false;
-    bool https = (uc.nScheme == INTERNET_SCHEME_HTTPS);
+    if (uc.nScheme != INTERNET_SCHEME_HTTPS) return false;
+    std::error_code cleanupEc;
+    std::filesystem::remove(dest, cleanupEc);
+    bool https = true;
     HINTERNET hS = WinHttpOpen(L"QQ/1.0", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
         WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
     if (!hS) return false;
@@ -1684,19 +1873,36 @@ static bool downloadFile(const std::string& url, const std::wstring& dest) {
         WinHttpCloseHandle(hR); WinHttpCloseHandle(hC); WinHttpCloseHandle(hS);
         return false;
     }
+    DWORD statusCode = 0;
+    DWORD statusSize = sizeof(statusCode);
+    if (!WinHttpQueryHeaders(hR, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
+        WINHTTP_HEADER_NAME_BY_INDEX, &statusCode, &statusSize, WINHTTP_NO_HEADER_INDEX) ||
+        statusCode < 200 || statusCode >= 300) {
+        WinHttpCloseHandle(hR); WinHttpCloseHandle(hC); WinHttpCloseHandle(hS);
+        return false;
+    }
     std::ofstream out(dest, std::ios::binary);
     if (!out) {
         WinHttpCloseHandle(hR); WinHttpCloseHandle(hC); WinHttpCloseHandle(hS);
         return false;
     }
-    DWORD avail, rd;
-    while (WinHttpQueryDataAvailable(hR, &avail) && avail > 0) {
+    bool ok = true;
+    DWORD avail = 0, rd = 0;
+    while (true) {
+        if (!WinHttpQueryDataAvailable(hR, &avail)) { ok = false; break; }
+        if (avail == 0) break;
         std::string chunk(avail, 0);
-        WinHttpReadData(hR, chunk.data(), avail, &rd);
+        if (!WinHttpReadData(hR, chunk.data(), avail, &rd)) { ok = false; break; }
         out.write(chunk.data(), rd);
+        if (!out) { ok = false; break; }
     }
+    out.close();
     WinHttpCloseHandle(hR); WinHttpCloseHandle(hC); WinHttpCloseHandle(hS);
-    return true;
+    if (!ok) {
+        std::error_code ec;
+        std::filesystem::remove(dest, ec);
+    }
+    return ok;
 }
 
 static void reg_updater() {
@@ -1890,15 +2096,12 @@ static void reg_extras() {
     ipc_on("shell.run", [](const json& a) -> json {
         auto program = a.value("program", std::string{});
         if (program.empty()) throw std::runtime_error("program is required");
-        std::wstring cmdLine = U2W(program);
+        std::wstring cmdLine = quote_windows_arg(U2W(program));
         if (a.contains("args") && a["args"].is_array()) {
             for (auto& arg : a["args"]) {
-                auto s = U2W(arg.get<std::string>());
+                if (!arg.is_string()) throw std::runtime_error("shell.run args must be strings");
                 cmdLine += L" ";
-                if (s.find(L' ') != std::wstring::npos)
-                    cmdLine += L'"' + s + L'"';
-                else
-                    cmdLine += s;
+                cmdLine += quote_windows_arg(U2W(arg.get<std::string>()));
             }
         }
 
@@ -2181,11 +2384,14 @@ static void setupWebView(ICoreWebView2Controller* ctrl) {
     if (SUCCEEDED(s.As(&s9)))
         s9->put_IsNonClientRegionSupportEnabled(TRUE);
 
-    // Auto-allow permissions (camera, microphone, etc.) without prompts
+    // WebView permissions are denied by default. Apps that embed trusted pages
+    // can opt into auto-allow with window.allowWebviewPermissions.
     g_view->add_PermissionRequested(
         Callback<ICoreWebView2PermissionRequestedEventHandler>(
         [](ICoreWebView2*, ICoreWebView2PermissionRequestedEventArgs* args) -> HRESULT {
-            args->put_State(COREWEBVIEW2_PERMISSION_STATE_ALLOW);
+            args->put_State(g_allowWebviewPermissions
+                ? COREWEBVIEW2_PERMISSION_STATE_ALLOW
+                : COREWEBVIEW2_PERMISSION_STATE_DENY);
             return S_OK;
         }).Get(), nullptr);
 
@@ -2236,6 +2442,13 @@ static void setupWebView(ICoreWebView2Controller* ctrl) {
             g_ctrl->put_IsVisible(TRUE);
             g_webviewReady = true;
             closeSplash();
+            // First frame is painted now — reveal a window held hidden by showWhenReady,
+            // so the user never sees the blank/native-framed window during WebView2 init.
+            if (g_deferFirstShow) {
+                g_deferFirstShow = false;
+                showWindowAnimated(g_hwnd, g_firstShowCmd, true);
+                UpdateWindow(g_hwnd);
+            }
             return S_OK;
         }).Get(), nullptr);
 }
@@ -2415,6 +2628,36 @@ static LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM w, LPARAM l) {
         ipc_emit("window.fileDrop", {{"files", files}, {"x", pt.x}, {"y", pt.y}});
         return 0;
     }
+
+    case WM_NCHITTEST:
+        if (g_frameless && !IsZoomed(h)) {
+            POINT pt{ GET_X_LPARAM(l), GET_Y_LPARAM(l) };
+            RECT rc;
+            GetWindowRect(h, &rc);
+
+            UINT dpi = GetDpiForWindow(h);
+            int frameX = GetSystemMetricsForDpi(SM_CXFRAME, dpi) + GetSystemMetricsForDpi(SM_CXPADDEDBORDER, dpi);
+            int frameY = GetSystemMetricsForDpi(SM_CYFRAME, dpi) + GetSystemMetricsForDpi(SM_CXPADDEDBORDER, dpi);
+            int minFrame = MulDiv(6, dpi, 96);
+            if (frameX < minFrame) frameX = minFrame;
+            if (frameY < minFrame) frameY = minFrame;
+
+            bool left = pt.x >= rc.left && pt.x < rc.left + frameX;
+            bool right = pt.x < rc.right && pt.x >= rc.right - frameX;
+            bool top = pt.y >= rc.top && pt.y < rc.top + frameY;
+            bool bottom = pt.y < rc.bottom && pt.y >= rc.bottom - frameY;
+
+            if (top && left) return HTTOPLEFT;
+            if (top && right) return HTTOPRIGHT;
+            if (bottom && left) return HTBOTTOMLEFT;
+            if (bottom && right) return HTBOTTOMRIGHT;
+            if (top) return HTTOP;
+            if (bottom) return HTBOTTOM;
+            if (left) return HTLEFT;
+            if (right) return HTRIGHT;
+        }
+        break;
+
     case WM_TRAYICON:
         switch (LOWORD(l)) {
         case WM_LBUTTONUP:    ipc_emit("tray.click"); break;
@@ -2447,6 +2690,14 @@ static LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM w, LPARAM l) {
         auto mw = g_cfg.value("/window/minWidth"_json_pointer, 200);
         auto mh = g_cfg.value("/window/minHeight"_json_pointer, 150);
         auto* mmi = reinterpret_cast<MINMAXINFO*>(l);
+        if (!g_frameless) {
+            RECT minRect{0, 0, mw, mh};
+            DWORD style = static_cast<DWORD>(GetWindowLongW(h, GWL_STYLE));
+            DWORD exStyle = static_cast<DWORD>(GetWindowLongW(h, GWL_EXSTYLE));
+            AdjustWindowRectExForDpi(&minRect, style, FALSE, exStyle, GetDpiForWindow(h));
+            mw = minRect.right - minRect.left;
+            mh = minRect.bottom - minRect.top;
+        }
         mmi->ptMinTrackSize = { mw, mh };
         if (g_frameless) {
             HMONITOR mon = MonitorFromWindow(h, MONITOR_DEFAULTTONEAREST);
@@ -2487,6 +2738,7 @@ int WINAPI wWinMain(HINSTANCE hi, HINSTANCE, LPWSTR, int ns) {
     loadPak();
 #endif
     auto winCfg    = g_cfg.value("window", json::object());
+    auto title     = U2W(winCfg.value("title", std::string{"\xe5\xbc\xba\xe5\xbc\xba"}));
 
     // Single instance lock
     bool singleInstance = winCfg.value("singleInstance", true);
@@ -2495,7 +2747,7 @@ int WINAPI wWinMain(HINSTANCE hi, HINSTANCE, LPWSTR, int ns) {
         auto mutexName = U2W("QQ_" + winCfg.value("title", std::string{"app"}));
         hMutex = CreateMutexW(nullptr, FALSE, mutexName.c_str());
         if (GetLastError() == ERROR_ALREADY_EXISTS) {
-            HWND existing = FindWindowW(L"QQ", nullptr);
+            HWND existing = FindWindowW(L"QQ", title.c_str());
             if (existing) {
                 showWindowAnimated(existing, IsIconic(existing) ? SW_RESTORE : SW_SHOW);
             }
@@ -2504,10 +2756,17 @@ int WINAPI wWinMain(HINSTANCE hi, HINSTANCE, LPWSTR, int ns) {
             return 0;
         }
     }
-    auto title     = U2W(winCfg.value("title", std::string{"\xe5\xbc\xba\xe5\xbc\xba"}));
     int  width     = winCfg.value("width", 1024);
     int  height    = winCfg.value("height", 768);
     g_frameless    = winCfg.value("frameless", false);
+    g_rounded      = winCfg.value("rounded", true);
+    g_saveWindowState = winCfg.value("saveWindowState", true);
+    g_allowWebviewPermissions = winCfg.value("allowWebviewPermissions", false);
+    bool initiallyVisible = winCfg.value("visible", true);
+    // Default ON (like "rounded"): hold the window hidden until WebView2 paints its
+    // first frame, eliminating the blank/native-framed startup flash. Opt out with false.
+    bool showWhenReady = winCfg.value("showWhenReady", true);
+    bool shouldCenter = winCfg.value("center", false);
     g_effectType   = parseEffectType(winCfg.value("effect", std::string{"none"}));
 
     // Security: load permissions
@@ -2520,19 +2779,15 @@ int WINAPI wWinMain(HINSTANCE hi, HINSTANCE, LPWSTR, int ns) {
     COLORREF bgClr = currentWindowBackgroundColor();
 
     // Window class
+    initAppIcons(hi);
     WNDCLASSEXW wc{sizeof(wc)};
     wc.lpfnWndProc   = WndProc;
     wc.hInstance      = hi;
     wc.lpszClassName  = L"QQ";
     wc.hCursor        = LoadCursorW(nullptr, IDC_ARROW);
     wc.hbrBackground  = CreateSolidBrush(bgClr);
-    // Try custom icon from resource, fallback to default
-    wc.hIcon   = LoadIconW(hi, MAKEINTRESOURCE(IDI_APP));
-    wc.hIconSm = LoadIconW(hi, MAKEINTRESOURCE(IDI_APP));
-    if (!wc.hIcon) {
-        wc.hIcon   = LoadIconW(nullptr, IDI_APPLICATION);
-        wc.hIconSm = LoadIconW(nullptr, IDI_APPLICATION);
-    }
+    wc.hIcon          = g_appIconLarge ? g_appIconLarge : LoadIconW(nullptr, IDI_APPLICATION);
+    wc.hIconSm        = g_appIconSmall ? g_appIconSmall : wc.hIcon;
     RegisterClassExW(&wc);
 
     // Keep the standard overlapped window semantics even in frameless mode.
@@ -2540,14 +2795,27 @@ int WINAPI wWinMain(HINSTANCE hi, HINSTANCE, LPWSTR, int ns) {
     DWORD style = WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN;
 
     DWORD exStyle = WS_EX_APPWINDOW;
+    int windowWidth = width;
+    int windowHeight = height;
+    if (!g_frameless) {
+        RECT desiredClient{0, 0, width, height};
+        AdjustWindowRectExForDpi(&desiredClient, style, FALSE, exStyle, GetDpiForSystem());
+        windowWidth = desiredClient.right - desiredClient.left;
+        windowHeight = desiredClient.bottom - desiredClient.top;
+    }
     g_hwnd = CreateWindowExW(exStyle, L"QQ", title.c_str(),
         style,
-        CW_USEDEFAULT, CW_USEDEFAULT, width, height,
+        CW_USEDEFAULT, CW_USEDEFAULT, windowWidth, windowHeight,
         nullptr, nullptr, hi, nullptr);
+    if (g_hwnd) {
+        if (g_appIconLarge) SendMessageW(g_hwnd, WM_SETICON, ICON_BIG, (LPARAM)g_appIconLarge);
+        if (g_appIconSmall) SendMessageW(g_hwnd, WM_SETICON, ICON_SMALL, (LPARAM)g_appIconSmall);
+    }
     enableWindowTransitions(g_hwnd);
 
     // Window state persistence — restore previous position/size
     g_stateFile = app_data_dir() + L"\\window-state.json";
+    bool restoredState = false;
     auto prevState = loadWindowState();
     if (!prevState.empty()) {
         int sx = prevState.value("x", 0);
@@ -2557,6 +2825,20 @@ int WINAPI wWinMain(HINSTANCE hi, HINSTANCE, LPWSTR, int ns) {
         SetWindowPos(g_hwnd, nullptr, sx, sy, sw, sh, SWP_NOZORDER);
         if (prevState.value("maximized", false))
             ns = SW_MAXIMIZE;
+        restoredState = true;
+    }
+    if (!restoredState && shouldCenter) {
+        RECT wr;
+        GetWindowRect(g_hwnd, &wr);
+        int ww = wr.right - wr.left;
+        int wh = wr.bottom - wr.top;
+        HMONITOR mon = MonitorFromWindow(g_hwnd, MONITOR_DEFAULTTONEAREST);
+        MONITORINFO mi{sizeof(mi)};
+        if (GetMonitorInfoW(mon, &mi)) {
+            int x = mi.rcWork.left + (mi.rcWork.right - mi.rcWork.left - ww) / 2;
+            int y = mi.rcWork.top + (mi.rcWork.bottom - mi.rcWork.top - wh) / 2;
+            SetWindowPos(g_hwnd, nullptr, x, y, 0, 0, SWP_NOSIZE | SWP_NOZORDER);
+        }
     }
 
     // DWM attributes for frameless
@@ -2593,9 +2875,18 @@ int WINAPI wWinMain(HINSTANCE hi, HINSTANCE, LPWSTR, int ns) {
     reg_multiwindow();
     reg_extras();
 
-    // Show window immediately with background color (don't wait for WebView2)
-    showWindowAnimated(g_hwnd, ns, true);
-    UpdateWindow(g_hwnd);
+    // Show immediately by default. With "showWhenReady" (default on), hold the window
+    // hidden until WebView2 paints its first frame (revealed in NavigationCompleted),
+    // so the user never sees a blank/native-framed flash during WebView2 init.
+    g_firstShowCmd = ns;
+    if (initiallyVisible) {
+        if (showWhenReady) {
+            g_deferFirstShow = true;
+        } else {
+            showWindowAnimated(g_hwnd, ns, true);
+            UpdateWindow(g_hwnd);
+        }
+    }
 
     init_webview();
 
