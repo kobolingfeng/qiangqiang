@@ -1,7 +1,7 @@
 // scripts/build.ts — Build frontend + compile native shell (MSVC)
 // Supports built-in Bun bundler or custom build commands (Vite, Webpack, etc.)
 // Single-exe mode: embeds HTML+config as Win32 RCDATA resources
-import { existsSync, mkdirSync, unlinkSync, writeFileSync, readdirSync, readFileSync } from 'fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmdirSync, statSync, unlinkSync, writeFileSync } from 'fs';
 import { join, resolve } from 'path';
 import { execSync } from 'child_process';
 
@@ -12,6 +12,64 @@ const DEPS = join(ROOT, 'deps');
 const singleExe  = process.argv.includes('--single-exe');
 const nativeOnly  = process.argv.includes('--native-only');
 const frontendOnly = process.argv.includes('--frontend-only');
+
+const buildLockRoot = join(ROOT, 'native', 'build');
+const buildLockDir = join(buildLockRoot, '.build.lock');
+
+function releaseBuildLock() {
+    try { unlinkSync(join(buildLockDir, 'owner.txt')); } catch {}
+    try { rmdirSync(buildLockDir); } catch {}
+}
+
+async function acquireBuildLock(timeoutMs = 5 * 60 * 1000) {
+    mkdirSync(buildLockRoot, { recursive: true });
+    const startedAt = Date.now();
+    while (true) {
+        try {
+            mkdirSync(buildLockDir);
+            writeFileSync(join(buildLockDir, 'owner.txt'), `${process.pid}\n${new Date().toISOString()}\n`, 'utf-8');
+            return;
+        } catch {
+            try {
+                const ageMs = Date.now() - statSync(buildLockDir).mtimeMs;
+                if (ageMs > timeoutMs) releaseBuildLock();
+            } catch {}
+            if (Date.now() - startedAt > timeoutMs) {
+                throw new Error('Timed out waiting for another build to finish.');
+            }
+            await Bun.sleep(250);
+        }
+    }
+}
+
+const packagedAssetExtensions = new Set([
+    '.avif', '.css', '.gif', '.htm', '.html', '.ico', '.jpeg', '.jpg',
+    '.js', '.json', '.map', '.mjs', '.otf', '.png', '.svg', '.ttf', '.txt',
+    '.wasm', '.webmanifest', '.webp', '.woff', '.woff2', '.xml',
+]);
+
+function normalizeHtmlAssetRef(value: string): string | null {
+    let ref = value.trim();
+    if (!ref || ref.startsWith('#')) return null;
+    if (/^(?:[a-z][a-z0-9+.-]*:|\/\/)/i.test(ref)) return null;
+
+    ref = ref.split(/[?#]/, 1)[0].replace(/\\/g, '/');
+    if (ref.startsWith('./')) ref = ref.slice(2);
+    while (ref.startsWith('/')) ref = ref.slice(1);
+    if (!ref || ref.startsWith('../')) return null;
+
+    try { ref = decodeURIComponent(ref); } catch {}
+
+    const slash = ref.lastIndexOf('/');
+    const fileName = slash >= 0 ? ref.slice(slash + 1) : ref;
+    const dot = fileName.lastIndexOf('.');
+    if (dot < 0) return null;
+    const ext = fileName.slice(dot).toLowerCase();
+    return packagedAssetExtensions.has(ext) ? ref : null;
+}
+
+await acquireBuildLock();
+process.once('exit', releaseBuildLock);
 
 // ── Load config ───────────────────────────────────────
 let buildCommand: string | undefined;
@@ -73,16 +131,25 @@ if (!nativeOnly) {
         const jsContent = await Bun.file(join(DIST, 'main.js')).text();
 
         let html = await Bun.file(join(ROOT, 'src', 'index.html')).text();
+        let inlined = false;
         if (singleExe) {
+            // Escape any literal </script> in the bundle so it can't terminate the inline
+            // <script> early, a classic cause of a blank single-exe window.
+            const safeJs = jsContent.replace(/<\/script>/gi, '<\\/script>');
+            const before = html;
             html = html.replace(
                 /<script[^>]*src=["']\.\/main\.ts["'][^>]*><\/script>/,
-                `<script type="module">${jsContent}</script>`
+                `<script type="module">${safeJs}</script>`
             );
+            inlined = html !== before;
+            // If the entry <script> didn't match (custom tag, Vite, etc.), don't silently
+            // ship an unservable ./main.ts. Fall back to referencing the packed main.js.
+            if (!inlined) html = html.replace(/\.\/main\.ts/g, './main.js');
         } else {
             html = html.replace('./main.ts', './main.js');
         }
         await Bun.write(join(DIST, 'index.html'), html);
-        console.log('✓ Frontend built' + (singleExe ? ' (single-exe: JS inlined)' : ''));
+        console.log('✓ Frontend built' + (singleExe ? (inlined ? ' (single-exe: JS inlined)' : ' (single-exe: JS from pak)') : ''));
     }
 
     // Always copy config to dist
@@ -119,13 +186,16 @@ const vcvarsall = join(vsPath, 'VC', 'Auxiliary', 'Build', 'vcvarsall.bat');
 // ── 3. Generate resource file for single-exe ──────────
 const mainCpp = join(ROOT, 'native', 'main.cpp');
 const outExe  = join(DIST, 'app.exe');
-const rcFile  = join(ROOT, 'native', 'app.rc');
+const buildMode = singleExe ? 'single' : 'portable';
+const nativeBuildDir = join(ROOT, 'native', 'build', buildMode);
+mkdirSync(nativeBuildDir, { recursive: true });
+const rcFile  = join(ROOT, 'native', `app-${buildMode}.rc`);
 const icoFile = join(ROOT, 'native', 'app.ico');
-const resFile = join(ROOT, 'native', 'app.res');
+const resFile = join(ROOT, 'native', `app-${buildMode}.res`);
 
 if (singleExe) {
-    const pakFile    = join(ROOT, 'native', '_embedded.pak');
-    const embeddedCfg = join(ROOT, 'native', '_embedded.json');
+    const pakFile    = join(ROOT, 'native', `_embedded-${buildMode}.pak`);
+    const embeddedCfg = join(ROOT, 'native', `_embedded-${buildMode}.json`);
 
     // Collect all files from dist/ into a pak archive
     // Format: "QQ" (2B) + fileCount (uint16) + [pathLen(uint16) + path + dataLen(uint32) + data]...
@@ -143,6 +213,43 @@ if (singleExe) {
         }
     };
     collectFiles(DIST, '');
+
+    const packedPaths = new Set(distFiles.map(f => f.path.replace(/\\/g, '/')));
+    const indexEntry = distFiles.find(f => f.path.replace(/\\/g, '/') === 'index.html');
+    if (!indexEntry) {
+        console.error('❌ Single-exe build failed: dist/index.html was not packed.');
+        console.error('   Build the frontend first and make sure it emits index.html into dist/.');
+        process.exit(1);
+    }
+
+    const indexHtml = indexEntry.data.toString('utf-8');
+    const referencedLocalAssets = new Set<string>();
+    for (const match of indexHtml.matchAll(/\b(?:src|href)=["']([^"']+)["']/gi)) {
+        const asset = normalizeHtmlAssetRef(match[1]);
+        if (asset) referencedLocalAssets.add(asset);
+    }
+    const missingAssets = [...referencedLocalAssets].filter(asset => !packedPaths.has(asset));
+    if (missingAssets.length > 0) {
+        console.error('❌ Single-exe build failed: frontend references files that were not packed:');
+        for (const asset of missingAssets) console.error('   - ' + asset);
+        process.exit(1);
+    }
+
+    if (distFiles.length > 0xffff) {
+        console.error(`❌ Single-exe build failed: too many files for the pak format (${distFiles.length}).`);
+        process.exit(1);
+    }
+    for (const f of distFiles) {
+        const pathLen = Buffer.byteLength(f.path);
+        if (pathLen > 0xffff) {
+            console.error('❌ Single-exe build failed: packed path is too long: ' + f.path);
+            process.exit(1);
+        }
+        if (f.data.length > 0xffffffff) {
+            console.error('❌ Single-exe build failed: packed file is too large: ' + f.path);
+            process.exit(1);
+        }
+    }
 
     // Build pak binary
     let totalSize = 4; // magic(2) + count(2)
@@ -169,13 +276,13 @@ if (singleExe) {
     const rcContent = [
         '#include "resource.h"',
         ...(existsSync(icoFile) ? ['IDI_APP ICON "app.ico"'] : []),
-        'IDR_HTML   RCDATA "_embedded.pak"',
-        'IDR_CONFIG RCDATA "_embedded.json"',
+        `IDR_HTML   RCDATA "_embedded-${buildMode}.pak"`,
+        `IDR_CONFIG RCDATA "_embedded-${buildMode}.json"`,
     ].join('\n');
     writeFileSync(rcFile, rcContent, 'utf-8');
 } else {
     if (existsSync(icoFile)) {
-        writeFileSync(rcFile, 'IDI_APP ICON "app.ico"\n', 'utf-8');
+        writeFileSync(rcFile, '#include "resource.h"\nIDI_APP ICON "app.ico"\n', 'utf-8');
     }
 }
 
@@ -203,12 +310,14 @@ if (singleExe && !linkRes) {
 
 // ── 4. Compile ────────────────────────────────────────
 const defines = singleExe ? '/DSINGLE_EXE' : '';
+const objFile = join(nativeBuildDir, 'main.obj');
 
 const clArgs = [
     '/nologo /EHsc /O2 /std:c++20 /utf-8',
     '/DUNICODE /D_UNICODE',
     defines,
     `"${mainCpp}"`,
+    `/Fo:"${objFile}"`,
     `/I"${wv2Inc}"`,
     `/I"${jsonInc}"`,
     `/Fe:"${outExe}"`,
@@ -228,10 +337,11 @@ try {
 }
 
 // Cleanup intermediate files
-Bun.spawnSync(['cmd', '/c', 'del /q *.obj 2>nul'], { cwd: ROOT });
+try { unlinkSync(rcFile); } catch {}
+try { unlinkSync(resFile); } catch {}
 if (singleExe) {
-    try { unlinkSync(join(ROOT, 'native', '_embedded.pak')); } catch {}
-    try { unlinkSync(join(ROOT, 'native', '_embedded.json')); } catch {}
+    try { unlinkSync(join(ROOT, 'native', `_embedded-${buildMode}.pak`)); } catch {}
+    try { unlinkSync(join(ROOT, 'native', `_embedded-${buildMode}.json`)); } catch {}
 }
 console.log('✓ Native shell compiled' + (singleExe ? ' (single-exe mode)' : ''));
 

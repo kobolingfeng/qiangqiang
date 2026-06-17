@@ -75,6 +75,31 @@ static std::wstring U2W(const std::string& s) {
     return w;
 }
 
+static int hex_value(char c) {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+}
+
+static std::string url_decode_path(const std::string& value) {
+    std::string out;
+    out.reserve(value.size());
+    for (size_t i = 0; i < value.size(); i++) {
+        if (value[i] == '%' && i + 2 < value.size()) {
+            int hi = hex_value(value[i + 1]);
+            int lo = hex_value(value[i + 2]);
+            if (hi >= 0 && lo >= 0) {
+                out.push_back(static_cast<char>((hi << 4) | lo));
+                i += 2;
+                continue;
+            }
+        }
+        out.push_back(value[i] == '\\' ? '/' : value[i]);
+    }
+    return out;
+}
+
 static std::wstring exe_dir() {
     wchar_t p[MAX_PATH];
     GetModuleFileNameW(nullptr, p, MAX_PATH);
@@ -2016,6 +2041,9 @@ static bool configureAppHost(ICoreWebView2* view) {
 
 #ifdef SINGLE_EXE
     if (!g_pakEntries.empty()) {
+        if (!findPakEntry("index.html"))
+            return false;
+
         view->AddWebResourceRequestedFilter(
             L"http://app.localhost/*", COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL);
         view->AddWebResourceRequestedFilter(
@@ -2045,10 +2073,25 @@ static bool configureAppHost(ICoreWebView2* view) {
                 if (qpos != std::string::npos) path = path.substr(0, qpos);
                 auto hpos = path.find('#');
                 if (hpos != std::string::npos) path = path.substr(0, hpos);
+                path = url_decode_path(path);
                 if (path.empty()) path = "index.html";
 
                 auto* entry = findPakEntry(path);
-                if (!entry) return S_OK;
+                if (!entry) {
+                    static const char missing[] = "Embedded asset not found";
+                    ComPtr<IStream> stream;
+                    stream.Attach(SHCreateMemStream(
+                        reinterpret_cast<const BYTE*>(missing), sizeof(missing) - 1));
+                    if (!stream) return S_OK;
+
+                    ComPtr<ICoreWebView2WebResourceResponse> response;
+                    g_env->CreateWebResourceResponse(
+                        stream.Get(), 404, L"Not Found",
+                        L"Content-Type: text/plain; charset=utf-8",
+                        &response);
+                    args->put_Response(response.Get());
+                    return S_OK;
+                }
 
                 auto mime = guessMimeType(path);
                 ComPtr<IStream> stream;
