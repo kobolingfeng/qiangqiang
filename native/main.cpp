@@ -34,6 +34,8 @@
 #include <unordered_map>
 #include <filesystem>
 #include <fstream>
+#include <limits>
+#include <cstring>
 #include <dwmapi.h>
 #include <windowsx.h>
 #include <winhttp.h>
@@ -942,6 +944,35 @@ static void reg_fs() {
         if (!f) throw std::runtime_error("Cannot open: " + path);
         return std::string((std::istreambuf_iterator<char>(f)), {});
     });
+    // Range read for large/growing files: returns a window [offset, offset+maxBytes) plus the
+    // file's total size, so a frontend can poll a growing log without re-reading the whole file.
+    ipc_on("fs.readTextRange", [](const json& a) -> json {
+        auto path = a.value("path", std::string{});
+        uint64_t offset = a.value("offset", uint64_t{0});
+        uint64_t maxBytes = a.value("maxBytes", uint64_t{0});
+
+        std::ifstream f(U2W(path), std::ios::binary | std::ios::ate);
+        if (!f) throw std::runtime_error("Cannot open: " + path);
+
+        auto endPos = f.tellg();
+        if (endPos < 0) throw std::runtime_error("Cannot stat: " + path);
+        uint64_t size = static_cast<uint64_t>(endPos);
+        if (offset > size) offset = size;
+
+        uint64_t toRead = size - offset;
+        if (maxBytes > 0 && toRead > maxBytes) toRead = maxBytes;
+        if (toRead > static_cast<uint64_t>((std::numeric_limits<std::streamsize>::max)()))
+            throw std::runtime_error("Requested range is too large");
+
+        std::string content;
+        content.resize(static_cast<size_t>(toRead));
+        f.seekg(static_cast<std::streamoff>(offset), std::ios::beg);
+        if (toRead > 0) {
+            f.read(content.data(), static_cast<std::streamsize>(toRead));
+            content.resize(static_cast<size_t>(f.gcount()));
+        }
+        return {{"content", content}, {"offset", offset}, {"size", size}};
+    });
     ipc_on("fs.writeTextFile", [](const json& a) -> json {
         auto path    = a.value("path", std::string{});
         auto content = a.value("content", std::string{});
@@ -1079,6 +1110,14 @@ static void reg_shell_app() {
         auto wdest = U2W(dest);
         std::error_code ec;
         fspath::create_directories(fspath::path(wdest).parent_path(), ec);
+        // Skip the write if the destination already matches the embedded asset (avoids
+        // redundant disk churn re-extracting unchanged sidecars on every launch).
+        if (fspath::exists(wdest, ec) && fspath::file_size(wdest, ec) == e->size) {
+            std::ifstream in(wdest, std::ios::binary);
+            std::string existing((std::istreambuf_iterator<char>(in)), {});
+            if (existing.size() == e->size && memcmp(existing.data(), e->data, e->size) == 0)
+                return true;
+        }
         std::ofstream out(wdest, std::ios::binary | std::ios::trunc);
         if (!out) throw std::runtime_error("cannot open destination for writing");
         out.write(e->data, e->size);

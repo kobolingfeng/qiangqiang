@@ -106,6 +106,10 @@ export const dialog = {
 
 export const fs = {
     readTextFile:  (path: string) => invoke<string>('fs.readTextFile', { path }),
+    // Range read for large/growing files: returns { content, offset, size } so you can poll
+    // a growing log without re-reading the whole file.
+    readTextRange: (path: string, offset = 0, maxBytes?: number) =>
+        invoke<{ content: string; offset: number; size: number }>('fs.readTextRange', { path, offset, ...(maxBytes ? { maxBytes } : {}) }),
     writeTextFile: (path: string, content: string) => invoke<boolean>('fs.writeTextFile', { path, content }),
     exists:        (path: string) => invoke<boolean>('fs.exists', { path }),
     readDir:       (path: string) => invoke<DirEntry[]>('fs.readDir', { path }),

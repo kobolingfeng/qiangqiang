@@ -74,11 +74,15 @@ process.once('exit', releaseBuildLock);
 // ── Load config ───────────────────────────────────────
 let buildCommand: string | undefined;
 let buildOutDir: string | undefined;
+let appTitle = 'app';
 try {
     const cfg = await Bun.file(join(ROOT, 'app.config.json')).json();
     buildCommand = cfg?.build?.command;
     buildOutDir  = cfg?.build?.outDir;
+    appTitle     = cfg?.window?.title || 'app';
 } catch {}
+// Output exe is named after the app title (so users get a branded exe, not app.exe).
+const EXE_NAME = (appTitle.replace(/[<>:"/\\|?*\x00-\x1f]/g, '').trim() || 'app') + '.exe';
 
 // ── Check deps ────────────────────────────────────────
 const wv2Inc  = join(DEPS, 'webview2', 'build', 'native', 'include');
@@ -185,7 +189,7 @@ const vcvarsall = join(vsPath, 'VC', 'Auxiliary', 'Build', 'vcvarsall.bat');
 
 // ── 3. Generate resource file for single-exe ──────────
 const mainCpp = join(ROOT, 'native', 'main.cpp');
-const outExe  = join(DIST, 'app.exe');
+const outExe  = join(DIST, EXE_NAME);
 const buildMode = singleExe ? 'single' : 'portable';
 const nativeBuildDir = join(ROOT, 'native', 'build', buildMode);
 mkdirSync(nativeBuildDir, { recursive: true });
@@ -207,7 +211,7 @@ if (singleExe) {
             const rel = prefix ? prefix + '/' + entry.name : entry.name;
             if (entry.isDirectory()) {
                 if (!skipDirs.has(entry.name)) collectFiles(full, rel);
-            } else if (entry.name !== 'app.exe' && entry.name !== 'app.config.json') {
+            } else if (entry.name !== EXE_NAME && entry.name !== 'app.exe' && entry.name !== 'app.config.json') {
                 distFiles.push({ path: rel, data: readFileSync(full) });
             }
         }
