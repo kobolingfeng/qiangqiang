@@ -435,9 +435,18 @@ async function setupWindowChrome() {
         if (!frameless) return;
 
         ui.titlebar.classList.add('active');
-        ui.titlebar.addEventListener('mousedown', (event) => {
+        // Drag the window from empty title-bar area (skip the window controls); double-click toggles
+        // maximize. app-region (NCR) is off natively, so this JS drag is the only drag path and it
+        // composes cleanly with the resize overlay below.
+        ui.titlebar.addEventListener('pointerdown', (event) => {
+            if (event.button !== 0) return;
             if ((event.target as HTMLElement).closest('.titlebar-controls')) return;
             win.startDrag();
+        });
+        ui.titlebar.addEventListener('dblclick', async (event) => {
+            if ((event.target as HTMLElement).closest('.titlebar-controls')) return;
+            if (await win.isMaximized()) await win.restore();
+            else await win.maximize();
         });
 
         $('tb-min').addEventListener('click', () => win.minimize());

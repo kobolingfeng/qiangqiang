@@ -503,18 +503,26 @@ import { shell } from './api';
 const { exitCode, stdout, stderr } = await shell.run('git', ['status']);
 ```
 
-## CSS 拖拽区域
+## 标题栏拖拽区域
 
-支持 CSS `app-region` 属性，无需手动调用 `window.startDrag()`：
+CSS `app-region` 在原生层是关闭的——开启后 WebView2 会在拖拽区域上方生成进程内非客户区子窗口，挡住无边框窗口缩放用的细边缘 hit zone（且在 CSS `zoom` 下定位会错位），导致顶边和顶角缩放失灵。改为在 JS 里手动转发拖拽，和缩放走同一条路（`window.startDrag()` / `window.startResize()`），两者互不冲突：
 
-```css
-.titlebar {
-    app-region: drag;        /* 可拖拽区域 */
-}
-.titlebar button {
-    app-region: no-drag;     /* 按钮等交互元素排除 */
-}
+```ts
+import { win } from './api';
+
+titlebar.addEventListener('pointerdown', (event) => {
+    if (event.button !== 0) return;
+    if ((event.target as HTMLElement).closest('.titlebar-controls')) return; // 排除按钮等交互元素
+    win.startDrag();
+});
+titlebar.addEventListener('dblclick', async (event) => {
+    if ((event.target as HTMLElement).closest('.titlebar-controls')) return;
+    if (await win.isMaximized()) await win.restore();
+    else await win.maximize();
+});
 ```
+
+默认文件查看器示例（`src/main.ts` 的 `setupWindowChrome`）已经是这个实现，照搬即可。
 
 ## 无边框窗口缩放
 

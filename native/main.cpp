@@ -42,6 +42,7 @@
 #include <cctype>
 #include <mutex>
 #include <atomic>
+#include <thread>
 #include <cstdio>
 #pragma comment(lib, "shlwapi.lib")
 #pragma comment(lib, "shell32.lib")
@@ -317,6 +318,7 @@ static std::unordered_map<int, FileWatcher*> g_watchers;
 static int g_nextWatchId = 1;
 
 #define WM_FILE_CHANGED (WM_USER + 2)
+#define WM_IPC_RESPOND  (WM_USER + 3)
 
 // Child windows
 struct ChildWindow {
@@ -537,10 +539,32 @@ static void ipc_on(const std::string& cmd, IpcFn fn) {
     g_cmds[cmd] = std::move(fn);
 }
 
+// Serialize to a WebMessage string WITHOUT throwing on non-UTF-8 bytes (e.g. console output in the
+// OEM/GBK code page on zh-CN Windows) — invalid sequences are replaced rather than raising
+// json::type_error, which would otherwise escape ipc_dispatch and drop the response.
+static std::wstring safeDumpW(const json& j) {
+    return U2W(j.dump(-1, ' ', false, json::error_handler_t::replace));
+}
+
 static void ipc_emit(const std::string& ev, const json& data = {}) {
     if (!g_view) return;
     json m = {{"event", ev}, {"data", data}};
-    g_view->PostWebMessageAsJson(U2W(m.dump()).c_str());
+    g_view->PostWebMessageAsJson(safeDumpW(m).c_str());
+}
+
+// ── Deferred (async) IPC ──────────────────────────────────────────────────
+// Handlers that must run OFF the UI thread (e.g. anything that blocks on a process or a socket, which
+// would otherwise freeze the whole window for the call's duration) register with ipc_on_async; when
+// their worker finishes it calls ipc_respond(id, {"result"|"error": ...}), which marshals the reply to
+// the UI thread (PostWebMessageAsJson is UI-thread-only) via WM_IPC_RESPOND.
+using IpcAsyncFn = std::function<void(const json&, int)>;
+static std::unordered_map<std::string, IpcAsyncFn> g_cmdsAsync;
+static void ipc_on_async(const std::string& cmd, IpcAsyncFn fn) { g_cmdsAsync[cmd] = std::move(fn); }
+struct IpcRespMsg { int id; json payload; };
+static void ipc_respond(int id, json payload) {
+    if (!g_hwnd) return;
+    auto* p = new IpcRespMsg{id, std::move(payload)};
+    if (!PostMessageW(g_hwnd, WM_IPC_RESPOND, 0, (LPARAM)p)) delete p;
 }
 
 static void ipc_dispatch(LPCWSTR raw) {
@@ -564,9 +588,17 @@ static void ipc_dispatch(LPCWSTR raw) {
             }
             if (it != g_permissions.end() && !it->second) {
                 resp["error"] = "permission denied: " + cmd;
-                g_view->PostWebMessageAsJson(U2W(resp.dump()).c_str());
+                g_view->PostWebMessageAsJson(safeDumpW(resp).c_str());
                 return;
             }
+        }
+
+        // Async handlers run off the UI thread and reply later via ipc_respond.
+        if (auto ait = g_cmdsAsync.find(cmd); ait != g_cmdsAsync.end()) {
+            int id = req.value("id", -1);
+            try { ait->second(args, id); }
+            catch (const std::exception& e) { ipc_respond(id, json{{"error", e.what()}}); }
+            return;
         }
 
         if (auto it = g_cmds.find(cmd); it != g_cmds.end()) {
@@ -575,7 +607,7 @@ static void ipc_dispatch(LPCWSTR raw) {
         } else {
             resp["error"] = "unknown: " + cmd;
         }
-        g_view->PostWebMessageAsJson(U2W(resp.dump()).c_str());
+        g_view->PostWebMessageAsJson(safeDumpW(resp).c_str());
     } catch (...) {}
 }
 
@@ -1129,8 +1161,13 @@ static void reg_shell_app() {
 #endif
     });
     ipc_on("window.startDrag", [](const json&) -> json {
+        // PostMessage (NOT SendMessage): this IPC handler runs synchronously inside WebView2's
+        // WebMessageReceived callback. SendMessage would enter the modal move loop right there,
+        // blocking WebView2's message pump so it can't composite during the drag — which briefly
+        // exposes the bare window frame (a black outline) until it catches up. Posting defers the
+        // move loop to the normal message loop, matching window.startResize.
         ReleaseCapture();
-        SendMessageW(g_hwnd, WM_NCLBUTTONDOWN, HTCAPTION, 0);
+        PostMessageW(g_hwnd, WM_NCLBUTTONDOWN, HTCAPTION, 0);
         return true;
     });
     // Start a native resize drag. Frontend detects mouse near window edge and
@@ -1307,8 +1344,29 @@ static bool crackHttpUrl(const std::string& url, URL_COMPONENTS& uc,
     return true;
 }
 
+// RAII for WinHTTP handles: closes on EVERY scope exit, including a C++ exception thrown by the
+// string/json work mid-request (header build, response-header alloc, body append, the 50 MB cap).
+// Manual WinHttpCloseHandle calls on each early-return miss those exception paths and leak handles.
+struct WinHttpH {
+    HINTERNET h{nullptr};
+    WinHttpH() = default;
+    WinHttpH(HINTERNET x) : h(x) {}
+    WinHttpH(WinHttpH&& o) noexcept : h(o.h) { o.h = nullptr; }
+    WinHttpH& operator=(WinHttpH&& o) noexcept { if (this != &o) { if (h) WinHttpCloseHandle(h); h = o.h; o.h = nullptr; } return *this; }
+    WinHttpH(const WinHttpH&) = delete;
+    WinHttpH& operator=(const WinHttpH&) = delete;
+    ~WinHttpH() { if (h) WinHttpCloseHandle(h); }
+    operator HINTERNET() const { return h; }
+};
+
 static void reg_http() {
-    ipc_on("http.request", [](const json& a) -> json {
+    // Runs OFF the UI thread (ipc_on_async): a synchronous WinHTTP call here would otherwise freeze
+    // the whole window for the request's duration. Replies via ipc_respond — same {id, result|error}
+    // shape the caller's invoke() promise already expects from a synchronous handler.
+    ipc_on_async("http.request", [](const json& a, int id) {
+      std::thread([a, id]() {
+        json httpOut;
+        try {
         auto url    = a.value("url", std::string{});
         auto method = a.value("method", std::string{"GET"});
         auto body   = a.value("body", std::string{});
@@ -1329,25 +1387,23 @@ static void reg_http() {
             throw std::runtime_error("Invalid HTTP method");
 
         bool https = (uc.nScheme == INTERNET_SCHEME_HTTPS);
-        HINTERNET hSession = WinHttpOpen(L"QQ/1.0", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
-                                          WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
+        WinHttpH hSession = WinHttpOpen(L"QQ/1.0", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
+                                        WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
         if (!hSession) throw std::runtime_error("WinHttpOpen failed");
+        // Bound every phase so a dead/slow server can't wedge the worker forever.
+        WinHttpSetTimeouts(hSession, 10000, 20000, 30000, 60000);
 
-        HINTERNET hConnect = WinHttpConnect(hSession, host, uc.nPort, 0);
-        if (!hConnect) { WinHttpCloseHandle(hSession); throw std::runtime_error("WinHttpConnect failed"); }
+        WinHttpH hConnect = WinHttpConnect(hSession, host, uc.nPort, 0);
+        if (!hConnect) throw std::runtime_error("WinHttpConnect failed");
 
         auto wMethod = U2W(method);
-        HINTERNET hRequest = WinHttpOpenRequest(hConnect, wMethod.c_str(), objectPath.c_str(),
-                                                 nullptr, WINHTTP_NO_REFERER,
-                                                 WINHTTP_DEFAULT_ACCEPT_TYPES,
-                                                 https ? WINHTTP_FLAG_SECURE : 0);
-        if (!hRequest) {
-            WinHttpCloseHandle(hConnect);
-            WinHttpCloseHandle(hSession);
-            throw std::runtime_error("WinHttpOpenRequest failed");
-        }
+        WinHttpH hRequest = WinHttpOpenRequest(hConnect, wMethod.c_str(), objectPath.c_str(),
+                                               nullptr, WINHTTP_NO_REFERER,
+                                               WINHTTP_DEFAULT_ACCEPT_TYPES,
+                                               https ? WINHTTP_FLAG_SECURE : 0);
+        if (!hRequest) throw std::runtime_error("WinHttpOpenRequest failed");
 
-        // Add custom headers
+        // Add custom headers (handles auto-close via WinHttpH on any throw below)
         std::wstring allHeaders;
         for (auto& [k, v] : hdrs.items()) {
             if (!v.is_string() || !is_http_token(k) || has_header_injection_chars(v.get<std::string>()))
@@ -1361,12 +1417,8 @@ static void reg_http() {
         LPVOID bodyPtr = body.empty() ? WINHTTP_NO_REQUEST_DATA : (LPVOID)body.data();
         DWORD bodyLen  = body.empty() ? 0 : (DWORD)body.size();
         if (!WinHttpSendRequest(hRequest, WINHTTP_NO_ADDITIONAL_HEADERS, 0, bodyPtr, bodyLen, bodyLen, 0) ||
-            !WinHttpReceiveResponse(hRequest, nullptr)) {
-            WinHttpCloseHandle(hRequest);
-            WinHttpCloseHandle(hConnect);
-            WinHttpCloseHandle(hSession);
+            !WinHttpReceiveResponse(hRequest, nullptr))
             throw std::runtime_error("HTTP request failed");
-        }
 
         // Status code
         DWORD statusCode = 0, sz = sizeof(statusCode);
@@ -1383,19 +1435,28 @@ static void reg_http() {
 
         // Response body
         std::string respBody;
-        DWORD available, read;
+        DWORD available = 0, read = 0;
         while (WinHttpQueryDataAvailable(hRequest, &available) && available > 0) {
             std::string chunk(available, 0);
-            WinHttpReadData(hRequest, chunk.data(), available, &read);
+            if (!WinHttpReadData(hRequest, chunk.data(), available, &read)) // don't resize() on a garbage count
+                throw std::runtime_error("HTTP read failed");
             chunk.resize(read);
             respBody += chunk;
+            if (respBody.size() > (50u << 20)) // 50 MB cap — fail loudly rather than silently truncate
+                throw std::runtime_error("HTTP response exceeded 50 MB limit");
         }
+        // hSession/hConnect/hRequest auto-close here (and on every throw above) via WinHttpH.
 
-        WinHttpCloseHandle(hRequest);
-        WinHttpCloseHandle(hConnect);
-        WinHttpCloseHandle(hSession);
-
-        return json{{"status", statusCode}, {"headers", W2U(respHdrs)}, {"body", respBody}};
+        json result;
+        result["status"] = (int)statusCode;
+        result["headers"] = W2U(respHdrs);
+        result["body"] = respBody;
+        httpOut["result"] = result;
+        } catch (const std::exception& e) {
+            httpOut["error"] = e.what();
+        }
+        ipc_respond(id, httpOut);
+      }).detach();
     });
 }
 
@@ -2131,10 +2192,44 @@ static void reg_extras() {
         return true;
     });
 
-    // Shell.run with stdout/stderr capture
-    ipc_on("shell.run", [](const json& a) -> json {
+    // Child processes (shell.run) join this Job so the OS kills them when the app exits (Windows
+    // doesn't kill children on parent exit). Declared before the spawn site; best-effort (a failed
+    // CreateJobObjectW just means orphan cleanup doesn't happen, not a functional failure).
+    static HANDLE g_childJob = []() -> HANDLE {
+        HANDLE j = CreateJobObjectW(nullptr, nullptr);
+        if (j) {
+            JOBOBJECT_EXTENDED_LIMIT_INFORMATION info{};
+            info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+            SetInformationJobObject(j, JobObjectExtendedLimitInformation, &info, sizeof(info));
+        }
+        return j;
+    }();
+
+    // cmd output is in the OEM/console code page (e.g. GBK 936 on zh-CN), not UTF-8. JSON requires
+    // valid UTF-8 (safeDumpW only saves the IPC reply from THROWING; non-UTF8 text would still come
+    // through replaced/mangled), so convert here — otherwise Chinese filenames/output get mangled.
+    static auto to_utf8_console = [](const std::string& s) -> std::string {
+        if (s.empty()) return s;
+        if (MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, s.data(), (int)s.size(), nullptr, 0) > 0)
+            return s; // already valid UTF-8
+        UINT cp = GetOEMCP();
+        int wlen = MultiByteToWideChar(cp, 0, s.data(), (int)s.size(), nullptr, 0);
+        if (wlen <= 0) return s;
+        std::wstring w(wlen, 0);
+        MultiByteToWideChar(cp, 0, s.data(), (int)s.size(), &w[0], wlen);
+        int ulen = WideCharToMultiByte(CP_UTF8, 0, w.data(), wlen, nullptr, 0, nullptr, nullptr);
+        if (ulen <= 0) return s;
+        std::string u(ulen, 0);
+        WideCharToMultiByte(CP_UTF8, 0, w.data(), wlen, &u[0], ulen, nullptr, nullptr);
+        return u;
+    };
+
+    // Shell.run with stdout/stderr capture. Runs on a worker thread (ipc_on_async) so a long-running
+    // command never freezes the window, and replies via ipc_respond when it finishes — same {id,
+    // result|error} shape the caller's invoke() promise already expects from a synchronous handler.
+    ipc_on_async("shell.run", [](const json& a, int id) {
         auto program = a.value("program", std::string{});
-        if (program.empty()) throw std::runtime_error("program is required");
+        if (program.empty()) throw std::runtime_error("program is required"); // caught synchronously by ipc_dispatch
         std::wstring cmdLine = quote_windows_arg(U2W(program));
         if (a.contains("args") && a["args"].is_array()) {
             for (auto& arg : a["args"]) {
@@ -2144,63 +2239,94 @@ static void reg_extras() {
             }
         }
 
-        SECURITY_ATTRIBUTES sa{sizeof(sa), nullptr, TRUE};
-        HANDLE hOutR, hOutW, hErrR, hErrW;
-        CreatePipe(&hOutR, &hOutW, &sa, 0);
-        CreatePipe(&hErrR, &hErrW, &sa, 0);
-        SetHandleInformation(hOutR, HANDLE_FLAG_INHERIT, 0);
-        SetHandleInformation(hErrR, HANDLE_FLAG_INHERIT, 0);
+        std::thread([cmdLine, id]() {
+            json out;
+            try {
+                SECURITY_ATTRIBUTES sa{sizeof(sa), nullptr, TRUE};
+                HANDLE hOutR = nullptr, hOutW = nullptr, hErrR = nullptr, hErrW = nullptr;
+                if (!CreatePipe(&hOutR, &hOutW, &sa, 0) || !CreatePipe(&hErrR, &hErrW, &sa, 0)) {
+                    if (hOutR) CloseHandle(hOutR);
+                    if (hOutW) CloseHandle(hOutW);
+                    if (hErrR) CloseHandle(hErrR);
+                    if (hErrW) CloseHandle(hErrW);
+                    throw std::runtime_error("Failed to create pipes");
+                }
+                SetHandleInformation(hOutR, HANDLE_FLAG_INHERIT, 0);
+                SetHandleInformation(hErrR, HANDLE_FLAG_INHERIT, 0);
 
-        STARTUPINFOW si{sizeof(si)};
-        si.dwFlags = STARTF_USESTDHANDLES;
-        si.hStdOutput = hOutW;
-        si.hStdError = hErrW;
-        PROCESS_INFORMATION pi{};
+                STARTUPINFOW si{sizeof(si)};
+                si.dwFlags = STARTF_USESTDHANDLES;
+                si.hStdOutput = hOutW;
+                si.hStdError = hErrW;
+                PROCESS_INFORMATION pi{};
 
-        std::vector<wchar_t> cmd(cmdLine.begin(), cmdLine.end());
-        cmd.push_back(0);
-        if (!CreateProcessW(nullptr, cmd.data(), nullptr, nullptr, TRUE,
-            CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi)) {
-            CloseHandle(hOutR); CloseHandle(hOutW);
-            CloseHandle(hErrR); CloseHandle(hErrW);
-            throw std::runtime_error("Failed to start process");
-        }
-        CloseHandle(hOutW);
-        CloseHandle(hErrW);
+                std::vector<wchar_t> cmd(cmdLine.begin(), cmdLine.end());
+                cmd.push_back(0);
+                if (!CreateProcessW(nullptr, cmd.data(), nullptr, nullptr, TRUE,
+                    CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi)) {
+                    CloseHandle(hOutR); CloseHandle(hOutW);
+                    CloseHandle(hErrR); CloseHandle(hErrW);
+                    throw std::runtime_error("Failed to start process");
+                }
+                CloseHandle(hOutW);
+                CloseHandle(hErrW);
+                if (g_childJob) AssignProcessToJobObject(g_childJob, pi.hProcess); // best-effort: die with the app
 
-        auto readPipe = [](HANDLE h) -> std::string {
-            std::string result;
-            char buf[4096];
-            DWORD rd;
-            while (ReadFile(h, buf, sizeof(buf), &rd, nullptr) && rd > 0)
-                result.append(buf, rd);
-            CloseHandle(h);
-            return result;
-        };
+                // Drain both pipes by POLLING and stop once the root process has exited — so a
+                // backgrounded descendant that inherited (and still holds) our stdout can't keep the
+                // read blocked forever (a hung shell.run). The two pipes drain CONCURRENTLY so a full
+                // buffer on one can't deadlock the other. Cap stored output but keep draining past it.
+                static const size_t OUT_CAP = 4u << 20; // 4 MB
+                auto drainPipe = [](HANDLE h, HANDLE proc) -> std::string {
+                    std::string result;
+                    char buf[4096];
+                    DWORD rd = 0, avail = 0;
+                    bool rootGone = false;
+                    try {
+                    for (;;) {
+                        if (!PeekNamedPipe(h, nullptr, 0, nullptr, &avail, nullptr)) break; // pipe broken/closed
+                        // Poll root exit EVERY iteration (not only when idle): a descendant that keeps
+                        // writing after the root exits would otherwise keep avail>0 forever and we'd
+                        // never notice the root was gone -> infinite read.
+                        if (!rootGone && WaitForSingleObject(proc, 0) == WAIT_OBJECT_0) rootGone = true;
+                        if (avail > 0) {
+                            if (!ReadFile(h, buf, sizeof(buf), &rd, nullptr) || rd == 0) break;
+                            if (result.size() < OUT_CAP) result.append(buf, rd);
+                            else if (rootGone) break; // capped AND root gone -> stop chasing a daemon's output
+                        } else if (rootGone) {
+                            break; // root gone and nothing left buffered -> done
+                        } else {
+                            Sleep(10); // idle: let the child produce more
+                        }
+                    }
+                    } catch (...) { /* OOM on append: keep what we drained, never throw out of the thread */ }
+                    CloseHandle(h);
+                    return result;
+                };
+                std::string errData;
+                std::thread errThread;
+                try { errThread = std::thread([&]() { errData = drainPipe(hErrR, pi.hProcess); }); }
+                catch (...) { CloseHandle(hErrR); } // thread creation failed (rare): drop stderr, avoid deadlock
+                std::string stdout_ = drainPipe(hOutR, pi.hProcess);
+                if (errThread.joinable()) errThread.join();
+                std::string stderr_ = std::move(errData);
 
-        // Read stderr in a background thread to prevent pipe deadlock
-        struct PipeCtx { HANDLE h; std::string data; };
-        auto* errCtx = new PipeCtx{hErrR, {}};
-        HANDLE hErrThread = CreateThread(nullptr, 0, [](LPVOID p) -> DWORD {
-            auto* c = (PipeCtx*)p;
-            char buf[4096]; DWORD rd;
-            while (ReadFile(c->h, buf, sizeof(buf), &rd, nullptr) && rd > 0)
-                c->data.append(buf, rd);
-            CloseHandle(c->h);
-            return 0;
-        }, errCtx, 0, nullptr);
-        auto stdout_ = readPipe(hOutR);
-        WaitForSingleObject(hErrThread, INFINITE);
-        CloseHandle(hErrThread);
-        auto stderr_ = std::move(errCtx->data);
-        delete errCtx;
-        WaitForSingleObject(pi.hProcess, INFINITE);
-        DWORD exitCode;
-        GetExitCodeProcess(pi.hProcess, &exitCode);
-        CloseHandle(pi.hProcess);
-        CloseHandle(pi.hThread);
+                DWORD exitCode = 0;
+                WaitForSingleObject(pi.hProcess, INFINITE); // wait for the real exit (drain can stop earlier on pipe close)
+                GetExitCodeProcess(pi.hProcess, &exitCode);
+                CloseHandle(pi.hProcess);
+                CloseHandle(pi.hThread);
 
-        return json{{"exitCode", (int)exitCode}, {"stdout", stdout_}, {"stderr", stderr_}};
+                out["result"] = json{
+                    {"exitCode", (int)exitCode},
+                    {"stdout", to_utf8_console(stdout_)},
+                    {"stderr", to_utf8_console(stderr_)},
+                };
+            } catch (const std::exception& e) {
+                out["error"] = e.what();
+            }
+            ipc_respond(id, out);
+        }).detach();
     });
 }
 
@@ -2418,10 +2544,13 @@ static void setupWebView(ICoreWebView2Controller* ctrl) {
     if (SUCCEEDED(s.As(&s5)))
         s5->put_IsPinchZoomEnabled(FALSE);
 
-    // Enable CSS app-region:drag for declarative title bar drag
+    // Keep CSS app-region OFF: when enabled, WebView2 spawns in-process non-client child windows over
+    // any app-region:drag area that swallow thin JS resize strips (and mis-map under CSS `zoom`), so a
+    // frameless app's top edge/corners can't be grabbed. The framework drives title-bar drag in JS
+    // (pointerdown -> window.startDrag) which composes cleanly with the JS edge-resize overlay.
     ComPtr<ICoreWebView2Settings9> s9;
     if (SUCCEEDED(s.As(&s9)))
-        s9->put_IsNonClientRegionSupportEnabled(TRUE);
+        s9->put_IsNonClientRegionSupportEnabled(FALSE);
 
     // WebView permissions are denied by default. Apps that embed trusted pages
     // can opt into auto-allow with window.allowWebviewPermissions.
@@ -2645,6 +2774,16 @@ static LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM w, LPARAM l) {
         delete data;
         return 0;
     }
+    case WM_IPC_RESPOND: {
+        auto* p = reinterpret_cast<IpcRespMsg*>(l);
+        if (g_view) {
+            json m = p->payload;
+            m["id"] = p->id;
+            g_view->PostWebMessageAsJson(safeDumpW(m).c_str()); // never throws on binary/non-UTF8 bodies
+        }
+        delete p;
+        return 0;
+    }
     case WM_KEYDOWN:
         // F12 toggles DevTools in dev mode
         if (w == VK_F12 && !g_devUrl.empty()) {
@@ -2668,34 +2807,10 @@ static LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM w, LPARAM l) {
         return 0;
     }
 
-    case WM_NCHITTEST:
-        if (g_frameless && !IsZoomed(h)) {
-            POINT pt{ GET_X_LPARAM(l), GET_Y_LPARAM(l) };
-            RECT rc;
-            GetWindowRect(h, &rc);
-
-            UINT dpi = GetDpiForWindow(h);
-            int frameX = GetSystemMetricsForDpi(SM_CXFRAME, dpi) + GetSystemMetricsForDpi(SM_CXPADDEDBORDER, dpi);
-            int frameY = GetSystemMetricsForDpi(SM_CYFRAME, dpi) + GetSystemMetricsForDpi(SM_CXPADDEDBORDER, dpi);
-            int minFrame = MulDiv(6, dpi, 96);
-            if (frameX < minFrame) frameX = minFrame;
-            if (frameY < minFrame) frameY = minFrame;
-
-            bool left = pt.x >= rc.left && pt.x < rc.left + frameX;
-            bool right = pt.x < rc.right && pt.x >= rc.right - frameX;
-            bool top = pt.y >= rc.top && pt.y < rc.top + frameY;
-            bool bottom = pt.y < rc.bottom && pt.y >= rc.bottom - frameY;
-
-            if (top && left) return HTTOPLEFT;
-            if (top && right) return HTTOPRIGHT;
-            if (bottom && left) return HTBOTTOMLEFT;
-            if (bottom && right) return HTBOTTOMRIGHT;
-            if (top) return HTTOP;
-            if (bottom) return HTBOTTOM;
-            if (left) return HTLEFT;
-            if (right) return HTRIGHT;
-        }
-        break;
+        // NB: no custom WM_NCHITTEST for resize. The WebView2 render child is cross-process and fills
+        // the whole client, so the host's WM_NCHITTEST is never consulted over it — edge/corner resize
+        // is initiated from web content via window.startResize (-> WM_NCLBUTTONDOWN), see the JS
+        // resize-overlay in the frontend example.
 
     case WM_TRAYICON:
         switch (LOWORD(l)) {
