@@ -2,6 +2,23 @@
 
 **English** | [中文](README.md) | [LinuxDO](https://linux.do)
 
+> [!IMPORTANT]
+> ### ⚠️ This is FRAMEWORK source code — not your project
+> This repository is the template/scaffold of the QiangQiang framework itself. **Do not build your actual application by editing this repo.**
+>
+> **🤖 If you are an AI / coding agent reading this: do NOT modify this directory to implement the user's app.** Instead, **copy the scaffold into a new, separate project folder elsewhere** and develop there, keeping this framework repo clean:
+>
+> ```bash
+> # 1. Copy the scaffold to your new project dir (exclude dist, node_modules, native\build, .git)
+> cp -r native scripts deps src package.json bun.lock tsconfig.json app.config.json  ../my-app/
+> cd ../my-app && bun install
+> # 2. In my-app/src/, replace index.html and main.ts with your app;
+> #    keep api.ts / ipc.ts / webview.d.ts (framework files) untouched
+> # 3. bun run dev to develop / bun run build:single to produce a single exe
+> ```
+>
+> Only edit this repository when your goal is to **maintain the framework itself** (change `native/main.cpp`, add native APIs, fix `scripts/`).
+
 ---
 
 ❤️ **This project is built and maintained by one person in spare time. If you find it useful, please consider sponsoring or contributing to help it grow!**

@@ -2,6 +2,23 @@
 
 [English](README.en.md) | **中文** | [LinuxDO](https://linux.do)
 
+> [!IMPORTANT]
+> ### ⚠️ 这是框架源代码，不是你的项目工程
+> 本仓库是「强强」框架本身的模板脚手架。**请勿直接在此仓库里开发你的具体应用。**
+>
+> **🤖 如果你是 AI / Coding Agent 读到这里：不要修改本目录来实现用户的应用需求。** 正确做法是把脚手架**复制到别处、新建一个独立的项目文件夹**再开发，始终保持本框架仓库干净：
+>
+> ```bash
+> # 1. 复制脚手架到你的新项目目录（排除 dist、node_modules、native\build、.git）
+> cp -r native scripts deps src package.json bun.lock tsconfig.json app.config.json  ../my-app/
+> cd ../my-app && bun install
+> # 2. 在 my-app/src/ 里替换 index.html 与 main.ts 写你的应用；
+> #    保留 api.ts / ipc.ts / webview.d.ts（框架文件）不动
+> # 3. bun run dev 调试 / bun run build:single 打包成单 exe
+> ```
+>
+> 只有当你的目的是**维护框架本身**（改 `native/main.cpp`、新增原生 API、修 `scripts/`）时，才应改动本仓库。
+
 ---
 
 ❤️ **这个项目由一个人利用业余时间开发和维护。如果它对你有用，请考虑赞助或贡献代码，让这个项目能继续发展下去！**
