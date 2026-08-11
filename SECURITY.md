@@ -6,10 +6,11 @@ Security matters because QiangQiang exposes native Windows capabilities to web c
 
 | Version | Supported |
 |---|---|
+| 0.1.x | Yes |
 | Latest `main` | Yes |
 | Older commits, forks, and generated applications | Best effort |
 
-Until the first stable release, fixes are made on `main`. Application authors should update their framework copy when security fixes land.
+Until the first stable release, fixes are made on `main` and the latest `0.x` release line. Application authors should update their framework copy when security fixes land.
 
 ## Reporting a vulnerability
 

@@ -266,6 +266,28 @@ static std::unordered_map<std::string, bool> g_permissions; // cmd -> allowed
 #define WM_TRAYICON (WM_USER + 1)
 static NOTIFYICONDATAW g_nid = {};
 static bool            g_trayActive = false;
+
+static std::wstring web_origin(const std::wstring& url) {
+    const auto scheme = url.find(L"://");
+    if (scheme == std::wstring::npos) return {};
+    const auto end = url.find_first_of(L"/?#", scheme + 3);
+    return url.substr(0, end == std::wstring::npos ? url.size() : end);
+}
+
+static bool has_web_origin(const std::wstring& url, const std::wstring& expectedUrl) {
+    const auto expected = web_origin(expectedUrl);
+    if (expected.empty() || url.size() < expected.size()) return false;
+    if (_wcsnicmp(url.c_str(), expected.c_str(), expected.size()) != 0) return false;
+    if (url.size() == expected.size()) return true;
+    const auto boundary = url[expected.size()];
+    return boundary == L'/' || boundary == L'?' || boundary == L'#';
+}
+
+static bool is_trusted_webview_url(const std::wstring& url) {
+    if (!g_devUrl.empty()) return has_web_origin(url, g_devUrl);
+    return has_web_origin(url, L"https://app.localhost")
+        || has_web_origin(url, L"https://app.local");
+}
 static HICON           g_appIconLarge = nullptr;
 static HICON           g_appIconSmall = nullptr;
 
@@ -2571,11 +2593,41 @@ static void setupWebView(ICoreWebView2Controller* ctrl) {
             return S_OK;
         }).Get(), nullptr);
 
+    // The native bridge is privileged. Keep the top-level document on the
+    // configured app origin so remote pages cannot inherit access to IPC.
+    g_view->add_NavigationStarting(
+        Callback<ICoreWebView2NavigationStartingEventHandler>(
+        [](ICoreWebView2*, ICoreWebView2NavigationStartingEventArgs* args) -> HRESULT {
+            LPWSTR uri = nullptr;
+            if (SUCCEEDED(args->get_Uri(&uri)) && uri) {
+                const bool trusted = is_trusted_webview_url(uri);
+                CoTaskMemFree(uri);
+                if (!trusted) args->put_Cancel(TRUE);
+            }
+            return S_OK;
+        }).Get(), nullptr);
+
+    // Browser popups are not part of the desktop app trust boundary. Apps can
+    // deliberately open external URLs through the validated shell.open API.
+    g_view->add_NewWindowRequested(
+        Callback<ICoreWebView2NewWindowRequestedEventHandler>(
+        [](ICoreWebView2*, ICoreWebView2NewWindowRequestedEventArgs* args) -> HRESULT {
+            args->put_Handled(TRUE);
+            return S_OK;
+        }).Get(), nullptr);
+
     // IPC handler
     g_view->add_WebMessageReceived(
         Callback<ICoreWebView2WebMessageReceivedEventHandler>(
         [](ICoreWebView2*, ICoreWebView2WebMessageReceivedEventArgs* a) -> HRESULT {
-            LPWSTR m; a->get_WebMessageAsJson(&m);
+            LPWSTR source = nullptr;
+            if (FAILED(a->get_Source(&source)) || !source) return S_OK;
+            const bool trusted = is_trusted_webview_url(source);
+            CoTaskMemFree(source);
+            if (!trusted) return S_OK;
+
+            LPWSTR m = nullptr;
+            if (FAILED(a->get_WebMessageAsJson(&m)) || !m) return S_OK;
             ipc_dispatch(m);
             CoTaskMemFree(m);
             return S_OK;

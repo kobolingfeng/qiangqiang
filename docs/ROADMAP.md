@@ -5,7 +5,7 @@ QiangQiang aims to make small, native-feeling Windows applications straightforwa
 ## Current priorities
 
 - Expand regression coverage for the IPC bridge, build tooling, and native edge cases.
-- Stabilize the public command/event contract ahead of the first tagged preview release.
+- Stabilize the public command/event contract throughout the `0.x` preview series.
 - Improve scaffold creation so a new application can start without modifying the framework repository.
 - Keep documentation, examples, and machine-readable agent instructions synchronized.
 - Strengthen default permissions and guidance for applications that load external content.
@@ -15,12 +15,12 @@ QiangQiang aims to make small, native-feeling Windows applications straightforwa
 - A dedicated project-creation command with minimal, selectable templates.
 - A machine-readable native capability manifest for tools and coding agents.
 - API examples and task recipes that agents can retrieve without scanning the full README.
-- Automated consistency checks between native handlers, TypeScript wrappers, and documentation.
+- Generate a machine-readable capability manifest from the tested native/TypeScript contract.
 - Migration notes that let agents update generated applications safely.
 
 ## Platform and distribution
 
-- Reproducible tagged releases with checksums and release notes.
+- Expand release provenance, verification, and optional code-signing guidance.
 - Optional signing guidance for production application distribution.
 - Broader accessibility, DPI, multi-monitor, and Windows theme test coverage.
 - Continued binary-size and startup-time measurement against representative applications.

@@ -5,6 +5,8 @@
 <p align="center">
   <a href="https://github.com/kobolingfeng/qiangqiang/actions/workflows/ci.yml"><img src="https://github.com/kobolingfeng/qiangqiang/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="LICENSE"><img src="https://img.shields.io/github/license/kobolingfeng/qiangqiang?style=flat-square" alt="MIT License"></a>
+  <a href="https://github.com/kobolingfeng/qiangqiang/stargazers"><img src="https://img.shields.io/github/stars/kobolingfeng/qiangqiang?style=flat-square" alt="GitHub stars"></a>
+  <a href="https://github.com/kobolingfeng/qiangqiang/releases"><img src="https://img.shields.io/github/v/release/kobolingfeng/qiangqiang?include_prereleases&style=flat-square" alt="Latest release"></a>
   <img src="https://img.shields.io/badge/Windows-10%20%7C%2011-0078D4?logo=windows&style=flat-square" alt="Windows 10 and 11">
   <img src="https://img.shields.io/badge/Bun-1.3.14-fbf0df?logo=bun&style=flat-square" alt="Bun 1.3.14">
   <img src="https://img.shields.io/badge/C%2B%2B-20-00599C?logo=cplusplus&style=flat-square" alt="C++20">
@@ -13,6 +15,7 @@
 <p align="center">
   <strong>English</strong> · <a href="README.md">中文</a> ·
   <a href="#quick-start">Quick Start</a> ·
+  <a href="docs/AI_FIRST.md">AI-first Contract</a> ·
   <a href="docs/ARCHITECTURE.md">Architecture</a> ·
   <a href="docs/ROADMAP.md">Roadmap</a> ·
   <a href="CONTRIBUTING.md">Contributing</a>
@@ -30,11 +33,13 @@ QiangQiang combines C++20, Win32, WebView2, Bun, and TypeScript so developers an
 - **Agent-native guidance** — `AGENTS.md`, GitHub Copilot instructions, architecture documentation, and path-specific coding rules are included.
 - **Simple delivery** — HTML, JavaScript, configuration, and the native shell can ship as one tiny executable.
 
+“AI-friendly” is a [verifiable framework contract](docs/AI_FIRST.md), not just a label: automated tests reconcile all 93 commands and 16 events, while CI type-checks, tests, compiles the native shell, and packages the single executable.
+
 > [!IMPORTANT]
 > This is the **framework source repository**. Build product applications in a separate scaffold. AI coding agents should treat `native/main.cpp`, `src/api.ts`, and `src/ipc.ts` as framework boundaries and normally work only in the new project's application layer. Edit this repository directly only when maintaining the framework.
 
 > [!NOTE]
-> QiangQiang is currently pre-preview and Windows-only. The public API may still evolve; follow the [changelog](CHANGELOG.md) and [roadmap](docs/ROADMAP.md).
+> QiangQiang is currently a `0.1` preview and Windows-only. The public API may still evolve; follow the [changelog](CHANGELOG.md) and [roadmap](docs/ROADMAP.md).
 
 ## Features
 
@@ -51,6 +56,8 @@ QiangQiang combines C++20, Win32, WebView2, Bun, and TypeScript so developers an
 - **Windows-only** — Dedicated to Windows, direct Win32 API access
 
 ## Quick Start
+
+To evaluate a build first, download the Windows CI-produced preview from [GitHub Releases](https://github.com/kobolingfeng/qiangqiang/releases). Release assets include a SHA-256 checksum and build provenance. Start from source below when developing the framework or creating an application.
 
 ### Prerequisites
 
@@ -368,28 +375,17 @@ Replace `native/app.ico` with your icon file and rebuild with `bun run build`.
 
 Recommended sizes: 16×16, 32×32, 48×48, 256×256.
 
-## Comparison
+## Positioning and tradeoffs
 
-| | QiangQiang | Wails | Tauri | Electron |
-|---|---|---|---|---|
-| Single exe size | **884 KB** | ~9 MB | ~2 MB | ~120 MB |
-| Memory usage | ~30 MB | ~50 MB | ~40 MB | ~150 MB |
-| Startup time | **~0.5s** | ~1s | ~0.5s | ~2s |
-| Build time | ~2s | ~10s | ~10s | N/A |
-| Cross-platform | Windows only | ✓ | ✓ | ✓ |
-| Frontend freedom | Full | Full | Full | Full |
-| Native APIs | 93 | ~30+ | ~70+ | ~50+ |
-| Single exe dist | ✓ | ✓ | ✗ | ✗ |
-| Runtime overhead | Zero (pure C++) | Go runtime ~5MB | Rust runtime ~2MB | Chromium |
-| Asset loading | Zero-copy mmap | Go embed | include_bytes! | asar |
+| Goal | QiangQiang's choice | Explicit tradeoff |
+|---|---|---|
+| Efficient agent context | One native boundary, one typed API, machine-checked contract | Complexity is not hidden in generated bindings or a plugin layer |
+| Lightweight delivery | A C++ shell reuses system WebView2 and can embed the frontend in one exe | Windows 10/11 with WebView2 only |
+| Windows integration | Direct Win32, DWM, COM, and system APIs | No cross-platform abstraction |
+| Frontend development | Any toolchain that emits HTML/CSS/JS | App authors still choose and maintain their frontend stack |
+| Auditability | 93 commands and 16 events are centralized, typed, and test-reconciled | The API may still evolve during `0.x` |
 
-> Data based on comparison tests using the same Vue 3 frontend app (MoXian editor).
-
-## Example App
-
-[`examples/墨线.exe`](examples/) — A Markdown editor built with QiangQiang, only **884 KB** as a single exe. Double-click to run (requires Windows 10/11).
-
-The same app built with Wails as a single file would be **~9 MB** — QiangQiang is less than 1/10 the size, with faster startup and lower memory usage.
+The file viewer in the root `src/` directory is an integration example and build acceptance case. Official executables are published only through [GitHub Releases](https://github.com/kobolingfeng/qiangqiang/releases); binaries are not committed to the source tree.
 
 ## Community and maintenance
 

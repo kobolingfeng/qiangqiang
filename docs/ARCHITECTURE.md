@@ -68,6 +68,8 @@ Build and packaging logic lives in `scripts/`. The single-executable packer vali
 The web/native IPC boundary is privileged. Important controls include:
 
 - Command namespace permissions from `app.config.json`
+- Main-WebView navigation and IPC source checks against the configured application origin
+- Popup blocking so external pages cannot inherit the native bridge
 - Typed wrappers and native-side input validation
 - Header and argument validation for network and process APIs
 - Path containment for development assets
@@ -88,4 +90,4 @@ The framework is designed to reduce the context and ambiguity an AI coding agent
 - Repository-wide and path-specific agent instructions
 - A working example that exercises core platform behavior
 
-See [AGENTS.md](../AGENTS.md) for the operational rules agents should follow.
+See the [AI-first framework contract](AI_FIRST.md) for the design constraints and [AGENTS.md](../AGENTS.md) for the operational rules agents should follow.

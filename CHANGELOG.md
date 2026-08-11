@@ -1,8 +1,10 @@
 # Changelog
 
-All notable framework changes are documented here. The format follows the principles of [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project intends to use semantic versioning after its first tagged preview release.
+All notable framework changes are documented here. The format follows the principles of [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses semantic versioning.
 
 ## [Unreleased]
+
+## [0.1.0] - 2026-08-11
 
 ### Added
 
@@ -12,6 +14,8 @@ All notable framework changes are documented here. The format follows the princi
 - Dependabot configuration for Bun and GitHub Actions dependencies.
 - Agent instructions for Codex, GitHub Copilot, and other `AGENTS.md`-aware tools.
 - Architecture and roadmap documentation.
+- A documented, machine-checkable AI-first framework contract.
+- Reproducible tagged releases with checksums and GitHub build provenance.
 
 ### Changed
 
@@ -22,10 +26,12 @@ All notable framework changes are documented here. The format follows the princi
 ### Removed
 
 - The undocumented no-op `devtools.close` native command.
+- The committed example executable; official binaries now come from reproducible GitHub Releases.
 
 ### Security
 
 - Removed machine-specific IDE and MCP configuration from version control.
+- Restricted main-WebView navigation and privileged IPC messages to the configured application origin.
 
 ## [0.0.1] - 2026-04-12
 

@@ -1,6 +1,6 @@
 {
   "name": "qiangqiang",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "description": "AI-friendly, ultra-lightweight Windows desktop app framework built with C++/Win32, WebView2, Bun, and TypeScript.",
   "license": "MIT",
   "author": "kobolingfeng",

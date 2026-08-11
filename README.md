@@ -5,6 +5,8 @@
 <p align="center">
   <a href="https://github.com/kobolingfeng/qiangqiang/actions/workflows/ci.yml"><img src="https://github.com/kobolingfeng/qiangqiang/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="LICENSE"><img src="https://img.shields.io/github/license/kobolingfeng/qiangqiang?style=flat-square" alt="MIT License"></a>
+  <a href="https://github.com/kobolingfeng/qiangqiang/stargazers"><img src="https://img.shields.io/github/stars/kobolingfeng/qiangqiang?style=flat-square" alt="GitHub stars"></a>
+  <a href="https://github.com/kobolingfeng/qiangqiang/releases"><img src="https://img.shields.io/github/v/release/kobolingfeng/qiangqiang?include_prereleases&style=flat-square" alt="Latest release"></a>
   <img src="https://img.shields.io/badge/Windows-10%20%7C%2011-0078D4?logo=windows&style=flat-square" alt="Windows 10 and 11">
   <img src="https://img.shields.io/badge/Bun-1.3.14-fbf0df?logo=bun&style=flat-square" alt="Bun 1.3.14">
   <img src="https://img.shields.io/badge/C%2B%2B-20-00599C?logo=cplusplus&style=flat-square" alt="C++20">
@@ -13,6 +15,7 @@
 <p align="center">
   <a href="README.en.md">English</a> · <strong>中文</strong> ·
   <a href="#快速开始">快速开始</a> ·
+  <a href="docs/AI_FIRST.md">AI-first 契约</a> ·
   <a href="docs/ARCHITECTURE.md">架构</a> ·
   <a href="docs/ROADMAP.md">路线图</a> ·
   <a href="CONTRIBUTING.zh-CN.md">参与贡献</a>
@@ -30,11 +33,13 @@
 - **代理原生支持** — 仓库内置 `AGENTS.md`、GitHub Copilot 指令、架构文档和路径级编码约束。
 - **产物易交付** — HTML、JavaScript、配置和原生壳可打包为一个体积很小的 exe。
 
+“AI 友好”在这里是一组[可验证的框架契约](docs/AI_FIRST.md)，而不是宣传标签：当前 93 个命令与 16 个事件由自动化测试核对，CI 会执行类型检查、契约测试、原生编译和单 exe 打包。
+
 > [!IMPORTANT]
 > 这是**框架源代码仓库**。开发具体应用时，请将脚手架复制到独立项目目录；AI 编程代理应把 `native/main.cpp`、`src/api.ts` 和 `src/ipc.ts` 视为框架边界，默认只在新项目的应用层工作。只有维护框架本身时才直接修改此仓库。
 
 > [!NOTE]
-> 项目目前处于首个正式预览版之前，仅支持 Windows。公共 API 仍可能演进，请关注 [CHANGELOG](CHANGELOG.md) 与 [路线图](docs/ROADMAP.md)。
+> 项目目前处于 `0.1` 预览阶段，仅支持 Windows。公共 API 仍可能演进，请关注 [CHANGELOG](CHANGELOG.md) 与 [路线图](docs/ROADMAP.md)。
 
 ## 特性
 
@@ -52,6 +57,8 @@
 - **仅 Windows** — 专注 Windows 平台，API 直达系统底层
 
 ## 快速开始
+
+想先体验构建产物，可从 [GitHub Releases](https://github.com/kobolingfeng/qiangqiang/releases) 下载由 Windows CI 构建、带 SHA-256 校验和与来源证明的预览版。开发框架或创建应用请按下面步骤从源码开始。
 
 ### 前置要求
 
@@ -584,28 +591,17 @@ await win.setEffect('none');     // 关闭特效
 
 推荐包含以下尺寸：16×16, 32×32, 48×48, 256×256。
 
-## 对比
+## 定位与取舍
 
-| | 强强 | Wails | Tauri | Electron |
-|---|---|---|---|---|
-| 单 exe 大小 | **884 KB** | ~9 MB | ~2 MB | ~120 MB |
-| 内存占用 | ~30 MB | ~50 MB | ~40 MB | ~150 MB |
-| 启动速度 | **~0.5s** | ~1s | ~0.5s | ~2s |
-| 编译速度 | ~2s | ~10s | ~10s | N/A |
-| 跨平台 | 仅 Windows | ✓ | ✓ | ✓ |
-| 前端自由度 | 完全自由 | 完全自由 | 完全自由 | 完全自由 |
-| 原生 API | 93 个 | ~30+ | ~70+ | ~50+ |
-| 单 exe 分发 | ✓ | ✓ | ✗ | ✗ |
-| 运行时开销 | 零（纯 C++） | Go 运行时 ~5MB | Rust 运行时 ~2MB | Chromium |
-| 资源加载 | 零拷贝内存映射 | Go embed | include_bytes! | asar |
+| 目标 | 强强的选择 | 明确取舍 |
+|---|---|---|
+| AI 上下文效率 | 单一原生边界、单一类型 API、机器校验契约 | 不隐藏复杂度到生成绑定或插件层 |
+| 轻量交付 | C++ 原生壳复用系统 WebView2，可嵌入前端为单 exe | 仅支持自带 WebView2 的 Windows 10/11 |
+| Windows 集成 | 直接使用 Win32、DWM、COM 与系统 API | 不提供跨平台抽象 |
+| 前端开发 | 接受任意能输出 HTML/CSS/JS 的工具链 | 应用作者仍需选择并维护前端框架 |
+| 可审计性 | 93 个命令和 16 个事件集中、类型化并由测试核对 | `0.x` 阶段 API 仍可能演进 |
 
-> 以上数据基于同一个 Vue 3 前端应用（墨线编辑器）的对比测试。
-
-## 示例应用
-
-[`examples/墨线.exe`](examples/) — 一个基于强强构建的 Markdown 编辑器，仅 **884 KB** 单 exe。双击即可运行（需要 Windows 10/11）。
-
-同样的应用使用 Wails 构建单文件需要 **~9 MB**，强强仅需不到 1/10 的体积，同时启动更快、内存占用更少。
+根目录 `src/` 中的文件查看器是框架集成示例与构建验收用例；官方可执行产物只通过 [GitHub Releases](https://github.com/kobolingfeng/qiangqiang/releases) 发布，不在源码树中提交二进制文件。
 
 ## 社区与维护
 

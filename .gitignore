@@ -6,7 +6,6 @@ native/build/
 native/_embedded.*
 *.log
 *.exe
-!examples/*.exe
 *.obj
 *.pdb
 *.ilk
