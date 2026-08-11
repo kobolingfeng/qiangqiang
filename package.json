@@ -2,9 +2,12 @@
   "name": "qiangqiang",
   "version": "0.0.1",
   "devDependencies": {
-    "@types/bun": "latest"
+    "@types/bun": "latest",
+    "typescript": "^7.0.2"
   },
   "scripts": {
+    "check": "tsc --noEmit",
+    "test": "bun test",
     "setup": "bun scripts/setup.ts",
     "dev": "bun scripts/dev.ts",
     "build": "bun scripts/build.ts",

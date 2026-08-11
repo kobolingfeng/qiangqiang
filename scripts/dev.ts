@@ -3,7 +3,12 @@
 import { existsSync, mkdirSync, watch } from 'fs';
 import { join, resolve } from 'path';
 import { createServer } from 'net';
-import { splitCommandLine, withResolvedDevServerPort } from './dev-utils';
+import {
+    getAppExecutableName,
+    resolveDevAssetPath,
+    splitCommandLine,
+    withResolvedDevServerPort,
+} from './dev-utils';
 
 const ROOT = resolve(import.meta.dir, '..');
 const DIST = join(ROOT, 'dist');
@@ -14,11 +19,13 @@ let PORT = 3000;
 const DEV_HOST = '127.0.0.1';
 let devCommand: string | undefined;
 let waitForPort = true;
+let appTitle: unknown = 'app';
 try {
     const cfg = await Bun.file(join(ROOT, 'app.config.json')).json();
     PORT       = Number(process.env.PORT || cfg?.dev?.port || 3000);
     devCommand = cfg?.dev?.command;
     waitForPort = cfg?.dev?.waitForPort ?? true;
+    appTitle = cfg?.window?.title;
 } catch {}
 
 async function isPortFree(port: number) {
@@ -45,7 +52,7 @@ async function pickPort(preferred: number) {
 PORT = await pickPort(PORT);
 
 // ── Check native exe ──────────────────────────────────
-const exePath = join(DIST, 'app.exe');
+const exePath = join(DIST, getAppExecutableName(appTitle));
 if (!existsSync(exePath)) {
     console.log('Native shell not found. Building native only...\n');
     const r = Bun.spawnSync(['bun', 'run', 'build:native'], { cwd: ROOT, stdout: 'inherit', stderr: 'inherit' });
@@ -154,19 +161,25 @@ setInterval(async () => {
     return true;
 }
 
-await buildFrontend();
+if (!await buildFrontend()) process.exit(1);
 console.log('✓ Frontend built');
 
 // ── Watch for changes ─────────────────────────────────
 let rebuilding = false;
+let rebuildQueued = false;
 watch(SRC, { recursive: true }, async (_event, filename) => {
+    rebuildQueued = true;
     if (rebuilding) return;
     rebuilding = true;
-    console.log(`⟳ ${filename} changed, rebuilding...`);
-    if (await buildFrontend()) {
-        console.log('✓ Rebuilt');
+    try {
+        while (rebuildQueued) {
+            rebuildQueued = false;
+            console.log(`⟳ ${filename ?? 'Source'} changed, rebuilding...`);
+            if (await buildFrontend()) console.log('✓ Rebuilt');
+        }
+    } finally {
+        rebuilding = false;
     }
-    rebuilding = false;
 });
 
 const server = Bun.serve({
@@ -179,12 +192,13 @@ const server = Bun.serve({
             return new Response(String(buildCount));
         }
 
-        let path = url.pathname;
-        if (path === '/') path = '/index.html';
-
-        const file = Bun.file(join(DIST, path));
+        const assetPath = resolveDevAssetPath(DIST, url.pathname);
+        if (!assetPath) return new Response('Bad Request', { status: 400 });
+        const file = Bun.file(assetPath);
         if (await file.exists()) {
-            return new Response(file);
+            return new Response(req.method === 'HEAD' ? null : file, {
+                headers: { 'Cache-Control': 'no-store' },
+            });
         }
         return new Response('Not Found', { status: 404 });
     },

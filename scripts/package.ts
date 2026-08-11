@@ -2,20 +2,13 @@
 import { execFileSync, execSync } from 'child_process';
 import { mkdirSync, readFileSync } from 'fs';
 import { join } from 'path';
+import { getAppExecutableName, sanitizeArtifactName } from './dev-utils';
 
 const root = join(import.meta.dir, '..');
 const dist = join(root, 'dist');
 const out  = join(root, 'release');
 const singleExe = process.argv.includes('--single-exe');
 const buildCommand = singleExe ? 'bun run build:single' : 'bun run build';
-
-function sanitizeFileName(value: string): string {
-    return value
-        .replace(/[<>:"/\\|?*\x00-\x1f]/g, '-')
-        .replace(/\s+/g, ' ')
-        .trim()
-        .replace(/[. ]+$/g, '') || 'app';
-}
 
 function quotePowerShell(value: string): string {
     return `'${value.replace(/'/g, "''")}'`;
@@ -46,13 +39,13 @@ try {
 } catch {}
 
 mkdirSync(out, { recursive: true });
-const zipName = `${sanitizeFileName(name)}-${singleExe ? 'single' : 'portable'}.zip`;
+const zipName = `${sanitizeArtifactName(name)}-${singleExe ? 'single' : 'portable'}.zip`;
 const zipPath = join(out, zipName);
 
 console.log(`📦 Packaging → release/${zipName}`);
 
 if (singleExe) {
-    compressArchive(join(dist, 'app.exe'), zipPath);
+    compressArchive(join(dist, getAppExecutableName(name)), zipPath);
 } else {
     compressArchive(join(dist, '*'), zipPath, false);
 }

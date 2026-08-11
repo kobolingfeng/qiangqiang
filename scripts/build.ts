@@ -4,6 +4,7 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmdirSync, statSync, unlinkSync, writeFileSync } from 'fs';
 import { join, resolve } from 'path';
 import { execSync } from 'child_process';
+import { getAppExecutableName } from './dev-utils';
 
 const ROOT = resolve(import.meta.dir, '..');
 const DIST = join(ROOT, 'dist');
@@ -82,7 +83,7 @@ try {
     appTitle     = cfg?.window?.title || 'app';
 } catch {}
 // Output exe is named after the app title (so users get a branded exe, not app.exe).
-const EXE_NAME = (appTitle.replace(/[<>:"/\\|?*\x00-\x1f]/g, '').trim() || 'app') + '.exe';
+const EXE_NAME = getAppExecutableName(appTitle);
 
 // ── Check deps ────────────────────────────────────────
 const wv2Inc  = join(DEPS, 'webview2', 'build', 'native', 'include');
@@ -193,6 +194,17 @@ const outExe  = join(DIST, EXE_NAME);
 const buildMode = singleExe ? 'single' : 'portable';
 const nativeBuildDir = join(ROOT, 'native', 'build', buildMode);
 mkdirSync(nativeBuildDir, { recursive: true });
+const exeMarker = join(buildLockRoot, 'app-executable.txt');
+try {
+    const previousExeName = readFileSync(exeMarker, 'utf-8').trim();
+    if (previousExeName && previousExeName !== EXE_NAME && previousExeName === previousExeName.split(/[\\/]/).pop()) {
+        unlinkSync(join(DIST, previousExeName));
+    }
+} catch {}
+// Clean up the legacy fixed-name output once branded executable names are in use.
+if (EXE_NAME !== 'app.exe') {
+    try { unlinkSync(join(DIST, 'app.exe')); } catch {}
+}
 const rcFile  = join(ROOT, 'native', `app-${buildMode}.rc`);
 const icoFile = join(ROOT, 'native', 'app.ico');
 const resFile = join(ROOT, 'native', `app-${buildMode}.res`);
@@ -300,7 +312,7 @@ if (existsSync(rcFile)) {
         if (singleExe) {
             console.error('❌ Resource compilation failed.');
             console.error('   Single-exe builds must embed the frontend into the exe.');
-            console.error('   Otherwise the app will only run while index.html/main.js are still beside dist\\app.exe.');
+            console.error(`   Otherwise the app will only run while index.html/main.js are still beside dist\\${EXE_NAME}.`);
             process.exit(1);
         }
         console.warn('⚠️ Resource compilation failed, building without resources');
@@ -335,6 +347,7 @@ const buildCmd = `call "${vcvarsall}" x64 >nul 2>&1 && cl ${clArgs}`;
 
 try {
     execSync(buildCmd, { cwd: ROOT, stdio: 'inherit' });
+    writeFileSync(exeMarker, EXE_NAME, 'utf-8');
 } catch {
     console.error('❌ Native compilation failed');
     process.exit(1);
@@ -356,5 +369,5 @@ if (singleExe) {
 } else {
     console.log(`\n✅ Build complete → ${DIST}`);
     console.log('   Run: bun run dev');
-    console.log('   Or:  dist\\app.exe');
+    console.log(`   Or:  dist\\${EXE_NAME}`);
 }
