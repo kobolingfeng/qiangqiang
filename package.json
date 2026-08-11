@@ -1,6 +1,7 @@
 {
   "name": "qiangqiang",
   "version": "0.0.1",
+  "license": "MIT",
   "devDependencies": {
     "@types/bun": "latest",
     "typescript": "^7.0.2"
