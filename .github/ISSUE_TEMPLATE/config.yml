@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Support and usage questions
+    url: https://github.com/kobolingfeng/qiangqiang/discussions
+    about: Ask setup, architecture, and application-development questions in Discussions.
+  - name: Security vulnerability
+    url: https://github.com/kobolingfeng/qiangqiang/security/policy
+    about: Read the private reporting instructions. Do not disclose vulnerabilities in a public issue.

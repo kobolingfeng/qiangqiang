@@ -15,3 +15,5 @@ native/_embedded.*
 *.res
 node_modules/
 .ai-switch/
+.cursor/
+.windsurf/

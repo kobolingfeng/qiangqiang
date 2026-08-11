@@ -1688,11 +1688,6 @@ static void reg_devtools() {
         if (g_view) g_view->OpenDevToolsWindow();
         return true;
     });
-    ipc_on("devtools.close", [](const json&) -> json {
-        // WebView2 doesn't have a direct close devtools API
-        // but opening when already open just focuses
-        return true;
-    });
 }
 
 // ================================================================

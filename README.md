@@ -1,45 +1,46 @@
-# 强强 (QiangQiang)
+<p align="center"><img src="native/app.svg" width="96" alt="QiangQiang logo"></p>
+<h1 align="center">强强 (QiangQiang)</h1>
+<p align="center"><strong>面向 AI 编程代理的超轻量 Windows 桌面应用框架</strong></p>
 
-[English](README.en.md) | **中文** | [LinuxDO](https://linux.do)
+<p align="center">
+  <a href="https://github.com/kobolingfeng/qiangqiang/actions/workflows/ci.yml"><img src="https://github.com/kobolingfeng/qiangqiang/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/kobolingfeng/qiangqiang?style=flat-square" alt="MIT License"></a>
+  <img src="https://img.shields.io/badge/Windows-10%20%7C%2011-0078D4?logo=windows&style=flat-square" alt="Windows 10 and 11">
+  <img src="https://img.shields.io/badge/Bun-1.3.14-fbf0df?logo=bun&style=flat-square" alt="Bun 1.3.14">
+  <img src="https://img.shields.io/badge/C%2B%2B-20-00599C?logo=cplusplus&style=flat-square" alt="C++20">
+</p>
+
+<p align="center">
+  <a href="README.en.md">English</a> · <strong>中文</strong> ·
+  <a href="#快速开始">快速开始</a> ·
+  <a href="docs/ARCHITECTURE.md">架构</a> ·
+  <a href="docs/ROADMAP.md">路线图</a> ·
+  <a href="CONTRIBUTING.zh-CN.md">参与贡献</a>
+</p>
+
+强强使用 C++20、Win32、WebView2、Bun 和 TypeScript，让开发者与 AI 编程代理用熟悉的 Web 前端技术构建原生质感的 Windows 应用，同时保持框架代码短小、可审计、易理解。
+
+> 仅 **884KB** 单 exe，**93 个原生命令 + 16 个事件**，无需随应用捆绑独立浏览器或 JavaScript 运行时（使用 Windows 10/11 自带的 WebView2）。
+
+## 为什么对 AI 友好
+
+- **上下文小且边界清晰** — 一个原生实现文件、一个类型化 API 面和固定的生成目录，代理无需遍历庞大运行时。
+- **接口可验证** — C++ IPC 处理器与 TypeScript 类型一一对应，`check`、`test`、单 exe 构建都有统一命令。
+- **前端自由** — AI 可以使用原生 TypeScript、React、Vue、Svelte 或 Solid，原生能力由稳定 API 提供。
+- **代理原生支持** — 仓库内置 `AGENTS.md`、GitHub Copilot 指令、架构文档和路径级编码约束。
+- **产物易交付** — HTML、JavaScript、配置和原生壳可打包为一个体积很小的 exe。
 
 > [!IMPORTANT]
-> ### ⚠️ 这是框架源代码，不是你的项目工程
-> 本仓库是「强强」框架本身的模板脚手架。**请勿直接在此仓库里开发你的具体应用。**
->
-> **🤖 如果你是 AI / Coding Agent 读到这里：不要修改本目录来实现用户的应用需求。** 正确做法是把脚手架**复制到别处、新建一个独立的项目文件夹**再开发，始终保持本框架仓库干净：
->
-> ```bash
-> # 1. 复制脚手架到你的新项目目录（排除 dist、node_modules、native\build、.git）
-> cp -r native scripts deps src package.json bun.lock tsconfig.json app.config.json  ../my-app/
-> cd ../my-app && bun install
-> # 2. 在 my-app/src/ 里替换 index.html 与 main.ts 写你的应用；
-> #    保留 api.ts / ipc.ts / webview.d.ts（框架文件）不动
-> # 3. bun run dev 调试 / bun run build:single 打包成单 exe
-> ```
->
-> 只有当你的目的是**维护框架本身**（改 `native/main.cpp`、新增原生 API、修 `scripts/`）时，才应改动本仓库。
+> 这是**框架源代码仓库**。开发具体应用时，请将脚手架复制到独立项目目录；AI 编程代理应把 `native/main.cpp`、`src/api.ts` 和 `src/ipc.ts` 视为框架边界，默认只在新项目的应用层工作。只有维护框架本身时才直接修改此仓库。
 
----
-
-❤️ **这个项目由一个人利用业余时间开发和维护。如果它对你有用，请考虑赞助或贡献代码，让这个项目能继续发展下去！**
-
-<a href="https://paypal.me/koboling"><img src="https://img.shields.io/badge/PayPal-赞助-blue?logo=paypal&style=for-the-badge" alt="PayPal 赞助"></a>
-
-<img src="assets/wechat-sponsor.jpg" width="240" alt="微信赞赏码">
-
-🙏 **欢迎贡献！** 无论是提 Issue、提交 PR、完善文档还是分享使用经验，都非常欢迎。一个人的精力有限，希望能和更多人一起把强强做得更好。
-
----
-
-超轻量 Windows 桌面应用框架。C++ Win32 + WebView2 + Bun + TypeScript。
-
-> 仅 **884KB** 单 exe，90 个原生 API，零运行时依赖（WebView2 已内置于 Windows 10/11）。
+> [!NOTE]
+> 项目目前处于首个正式预览版之前，仅支持 Windows。公共 API 仍可能演进，请关注 [CHANGELOG](CHANGELOG.md) 与 [路线图](docs/ROADMAP.md)。
 
 ## 特性
 
 - **极小体积** — 单 exe 884KB（含嵌入 HTML/JS/Config），无需任何外部文件
 - **极快编译** — 单文件 C++，增量编译 < 2s
-- **完整 API** — 90 个原生命令 + 15 个事件 + 完整 TypeScript 类型
+- **完整 API** — 93 个原生命令 + 16 个事件 + 完整 TypeScript 类型
 - **真无边框窗口** — Composition 模式 WebView2（和 Wails/Tauri 同级），零像素边框 + DWM 阴影
 - **原生窗口动画** — 最小化、最大化、还原、打开、关闭走 Win32/DWM 过渡动画
 - **Win11 主题联动** — 自动跟随系统深浅色和强调色，同步 DWM 边框与前端 CSS 变量
@@ -62,6 +63,8 @@
 ```bash
 bun install
 bun run setup    # 下载 WebView2 SDK + JSON 库
+bun run check    # TypeScript 类型检查
+bun run test     # 自动化测试
 ```
 
 ### 开发
@@ -382,7 +385,7 @@ await devtools.open();
 │   └── app.ico         # 应用图标（替换此文件自定义图标）
 ├── src/
 │   ├── ipc.ts          # IPC 通信桥
-│   ├── api.ts          # 全部 90 个命令的 TypeScript 类型封装
+│   ├── api.ts          # 全部 93 个命令的 TypeScript 类型封装
 │   ├── main.ts         # 文件查看器示例前端
 │   └── index.html      # 入口页面
 ├── scripts/
@@ -404,7 +407,7 @@ await devtools.open();
 事件: { event: string, data: any }
 ```
 
-## 全部命令列表 (88 个)
+## 全部命令列表 (93 个)
 
 | 分类 | 命令 | 说明 |
 |---|---|---|
@@ -412,10 +415,10 @@ await devtools.open();
 | **多窗口** | `window.createChild` `window.closeChild` `window.listChildren` | 子窗口 |
 | **窗口配置** | `window.getConfig` `window.saveState` `window.loadState` | 配置 + 持久化 |
 | **对话框** | `dialog.openFile` `dialog.saveFile` `dialog.openFolder` `dialog.message` `dialog.confirm` | 系统对话框 |
-| **文件系统** | `fs.readTextFile` `fs.writeTextFile` `fs.exists` `fs.readDir` `fs.mkdir` `fs.remove` `fs.rename` `fs.stat` | 文件操作 |
+| **文件系统** | `fs.readTextFile` `fs.readTextRange` `fs.writeTextFile` `fs.exists` `fs.readDir` `fs.mkdir` `fs.remove` `fs.rename` `fs.stat` | 文件操作 |
 | **剪贴板** | `clipboard.readText` `clipboard.writeText` | 剪贴板 |
 | **Shell** | `shell.open` `shell.execute` `shell.run` | Shell 操作 |
-| **应用** | `app.exit` `app.dataDir` `app.checkUpdate` `app.downloadUpdate` `app.installUpdate` | 应用控制 |
+| **应用** | `app.exit` `app.dataDir` `app.exeDir` `app.extractAsset` `app.checkUpdate` `app.downloadUpdate` `app.installUpdate` | 应用控制 |
 | **托盘** | `tray.create` `tray.setTooltip` `tray.remove` | 系统托盘 |
 | **环境变量** | `env.get` `env.getAll` | 环境变量 |
 | **快捷键** | `hotkey.register` `hotkey.unregister` `hotkey.unregisterAll` | 全局热键 |
@@ -425,12 +428,12 @@ await devtools.open();
 | **OS** | `os.platform` `os.arch` `os.version` `os.hostname` `os.username` `os.locale` `os.isDarkMode` `os.theme` `os.accentColor` | 系统信息 |
 | **路径** | `path.home` `path.documents` `path.desktop` `path.downloads` `path.appData` `path.localAppData` `path.temp` | 特殊目录 |
 | **文件监听** | `watcher.start` `watcher.stop` | 文件系统监听 |
-| **DevTools** | `devtools.open` `devtools.close` | 开发者工具 |
+| **DevTools** | `devtools.open` | 开发者工具 |
 | **注册表** | `registry.read` `registry.write` `registry.delete` `registry.exists` | Windows Registry |
 | **深度链接** | `protocol.register` `protocol.unregister` | 自定义 URL 协议 |
 | **日志** | `log.setFile` `log.write` `log.clear` `log.getPath` | 结构化日志 |
 
-## 事件列表
+## 事件列表 (16 个)
 
 | 事件 | 数据 | 说明 |
 |---|---|---|
@@ -449,6 +452,7 @@ await devtools.open();
 | `tray.click` | — | 托盘单击 |
 | `tray.doubleClick` | — | 托盘双击 |
 | `tray.rightClick` | — | 托盘右击 |
+| `os.themeChanged` | `{ dark, accentColor, backgroundColor, foregroundColor }` | 系统主题变化 |
 
 ## 安全权限
 
@@ -590,7 +594,7 @@ await win.setEffect('none');     // 关闭特效
 | 编译速度 | ~2s | ~10s | ~10s | N/A |
 | 跨平台 | 仅 Windows | ✓ | ✓ | ✓ |
 | 前端自由度 | 完全自由 | 完全自由 | 完全自由 | 完全自由 |
-| 原生 API | 88 个 | ~30+ | ~70+ | ~50+ |
+| 原生 API | 93 个 | ~30+ | ~70+ | ~50+ |
 | 单 exe 分发 | ✓ | ✓ | ✗ | ✗ |
 | 运行时开销 | 零（纯 C++） | Go 运行时 ~5MB | Rust 运行时 ~2MB | Chromium |
 | 资源加载 | 零拷贝内存映射 | Go embed | include_bytes! | asar |
@@ -603,6 +607,26 @@ await win.setEffect('none');     // 关闭特效
 
 同样的应用使用 Wails 构建单文件需要 **~9 MB**，强强仅需不到 1/10 的体积，同时启动更快、内存占用更少。
 
-## License
+## 社区与维护
 
-MIT
+- 提交 Pull Request 前请阅读[中文贡献指南](CONTRIBUTING.zh-CN.md)。
+- 使用问题和应用创意请前往 [GitHub Discussions](https://github.com/kobolingfeng/qiangqiang/discussions)。
+- 安全漏洞请按照[安全策略](SECURITY.md)私下报告。
+- 深入了解项目请查看[架构](docs/ARCHITECTURE.md)、[路线图](docs/ROADMAP.md)和[变更记录](CHANGELOG.md)。
+- 中文交流也欢迎前往 [LinuxDO](https://linux.do)。
+
+## 支持项目
+
+强强由维护者利用业余时间独立开发。代码贡献、Issue、文档完善和赞助都能帮助项目持续发展。
+
+<a href="https://paypal.me/koboling"><img src="https://img.shields.io/badge/PayPal-赞助-blue?logo=paypal&style=flat-square" alt="PayPal 赞助"></a>
+
+<details>
+<summary>微信赞赏</summary>
+
+<img src="assets/wechat-sponsor.jpg" width="240" alt="微信赞赏码">
+</details>
+
+## 许可证
+
+强强基于 [MIT License](LICENSE) 开源。

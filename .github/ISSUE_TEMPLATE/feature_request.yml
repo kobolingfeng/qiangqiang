@@ -1,0 +1,63 @@
+name: Feature request
+description: Propose an improvement to the QiangQiang framework
+title: "[Feature]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        QiangQiang prioritizes a small auditable core, Windows-native behavior, typed APIs, and AI-friendly development. Explain the problem before the implementation.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem or use case
+      description: What developer or user problem should the framework solve?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: Describe the API and expected behavior. Code sketches are welcome.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Include workarounds, frontend-only approaches, or existing Windows APIs.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: impact
+    attributes:
+      label: Primary impact
+      options:
+        - AI-agent usability
+        - Native Windows capability
+        - Reliability or security
+        - Performance or binary size
+        - Developer experience or tooling
+        - Documentation or examples
+    validations:
+      required: true
+
+  - type: textarea
+    id: tradeoffs
+    attributes:
+      label: Compatibility, security, and size tradeoffs
+      description: Note new dependencies, permissions, breaking changes, or binary-size impact.
+
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Checklist
+      options:
+        - label: I searched existing issues and the roadmap.
+          required: true
+        - label: This belongs in the framework rather than a single application.
+          required: true
+        - label: I am willing to help test or implement this proposal.

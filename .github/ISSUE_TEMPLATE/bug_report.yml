@@ -1,0 +1,86 @@
+name: Bug report
+description: Report a reproducible defect in the QiangQiang framework
+title: "[Bug]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for helping improve QiangQiang. Please search existing issues and remove sensitive information from logs before submitting.
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Affected area
+      options:
+        - Native window or WebView2
+        - IPC or TypeScript API
+        - File system, shell, HTTP, or another native API
+        - Build, development server, or packaging
+        - Example application
+        - Documentation
+        - Not sure
+    validations:
+      required: true
+
+  - type: input
+    id: revision
+    attributes:
+      label: QiangQiang version or commit
+      description: Provide a tag or commit SHA.
+      placeholder: e.g. main at 89641b0
+    validations:
+      required: true
+
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      description: Include Windows, Bun, WebView2, and frontend framework versions where relevant.
+      placeholder: Windows 11 24H2; Bun 1.3.14; WebView2 1xx; vanilla TypeScript
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Minimal reproduction
+      description: List exact steps and link a minimal repository when possible.
+      placeholder: |
+        1. Configure ...
+        2. Run ...
+        3. Observe ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior and logs
+      description: Paste relevant output, crash details, screenshots, or recordings. Remove secrets and personal paths.
+    validations:
+      required: true
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Include attempted workarounds or suspected causes if useful.
+
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Checklist
+      options:
+        - label: I searched existing issues and documentation.
+          required: true
+        - label: I can reproduce this on the latest `main` branch or explained why I cannot.
+          required: true
+        - label: This report does not contain credentials, private data, or an undisclosed vulnerability.
+          required: true

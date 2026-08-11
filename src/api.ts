@@ -45,6 +45,14 @@ export interface SystemTheme {
     foregroundColor: string;
 }
 
+export interface WindowState {
+    x: number;
+    y: number;
+    w: number;
+    h: number;
+    maximized: boolean;
+}
+
 // ── Window ────────────────────────────────────
 
 export const win = {
@@ -68,8 +76,10 @@ export const win = {
     setProgress:        (value: number) => invoke<boolean>('window.setProgress', { value }),
     startDrag:          () => invoke<boolean>('window.startDrag'),
     startResize:        (edge: ResizeEdge) => invoke<boolean>('window.startResize', { edge }),
-    getConfig:      () => invoke<unknown>('window.getConfig'),
-    isFrameless:    () => invoke<boolean>('window.isFrameless'),
+    getConfig:          () => invoke<unknown>('window.getConfig'),
+    saveState:          () => invoke<boolean>('window.saveState'),
+    loadState:          () => invoke<Partial<WindowState>>('window.loadState'),
+    isFrameless:        () => invoke<boolean>('window.isFrameless'),
     createChild: (opts: { title?: string; width?: number; height?: number; url?: string }) =>
         invoke<number>('window.createChild', opts),
     closeChild:  (id: number) => invoke<boolean>('window.closeChild', { id }),
